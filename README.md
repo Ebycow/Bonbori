@@ -37,8 +37,21 @@ open Bonbori.app
 | Space | 番組情報を表示 |
 | R | 録画の開始 / 停止（TS をそのまま `~/Movies/Bonbori/` に保存） |
 | P | キャプチャ（PNG を `~/Pictures/Bonbori/` に保存） |
+| S | 翻訳字幕（英語の音声を日本語に訳して表示）のオン / オフ |
 | F / Return / ダブルクリック | フルスクリーン |
 | 右クリック / Control+クリック | メニュー（選局・録画・キャプチャ・音声・表示・設定） |
+
+## 翻訳字幕
+
+`S`（またはメニュー「字幕」）で、放送中の英語の音声をこの Mac 上で文字に起こし、日本語に訳して画面下に表示します（macOS 26 以降）。MLB 中継の副音声（現地実況）などを想定しています。音声認識は Speech フレームワーク、翻訳は Translation フレームワークで、どちらもオフラインで動きます。
+
+- **字幕の出し方**（メニュー「字幕」）
+  - **字幕をできしだい表示**: 映像はそのまま。字幕は話し始めから 3〜6 秒ほど遅れて出ます。
+  - **映像を遅らせて字幕に合わせる**: 映像と音声を 6〜12 秒（初期値 8 秒）遅らせて、字幕を話しているときに出します。選局してから映像が出るまでも、その秒数かかります。
+- **認識する音声**: 自動（番組情報で二重音声なら副音声、それ以外は左右を混ぜたもの）/ 主音声 / 副音声 / 左右を混ぜる
+- 英語の原文を訳文の下に表示するかどうかも選べます。
+- 初回は音声認識モデルを自動でダウンロードします。英語→日本語の翻訳モデルが無いときは英語だけを表示します（システム設定 › 一般 › 言語と地域 › 翻訳言語 から追加できます）。
+- 実測（M1、MLB 中継の英語実況）: 文字起こしと翻訳を合わせて CPU 1 コアの 1 割未満。訳文は話し終わってから中央値 4 秒、9 割が 6 秒以内に出ます。
 
 ## 番組表
 
@@ -55,7 +68,8 @@ BS/CS はどのトランスポンダにもネットワーク内の全サービ�
 
 ```
 Sources/TVCore (C)          BonDriverProxyEx プロトコル、TS デマルチプレクサ、ARIB 文字列、FFmpeg デコーダ
-  session.c   TCP クライアント。受信スレッドで TS を受け取り、選局の応答を境に世代(gen)を切り替える
+  session.c   TCP クライアント。受信スレッドで TS を受け取り、選局の応答を境に世代(gen)を切り替える。
+              翻訳字幕用に、音声を遅延なしでもう一度デコードする経路と、映像・音声・時計をデコード前に遅らせる遅延バッファを持つ
   demux.c     PAT/PMT/SDT/NIT/EIT/TOT、PES 組み立て、PCR、33bit ラップ処理、
               EIT（全サービスの p/f・schedule）を section 単位で重複除去して JSON で渡す、
               PMT が確定する前のパケットをリングバッファから再生して I フレームを取りこぼさない
@@ -64,12 +78,15 @@ Sources/TVCore (C)          BonDriverProxyEx プロトコル、TS デマルチ�
               NV12 の IOSurface CVPixelBuffer / LPCM の CMSampleBuffer を作る
 Sources/Bonbori (Swift/AppKit)
   Player.swift  AVSampleBufferDisplayLayer + AVSampleBufferAudioRenderer + RenderSynchronizer。
-                選局時に同期器の時計を放送の PCR に合わせ（PCR − 遅延）、あとは音声デバイスの時計で進める
+                選局時に同期器の時計を放送の PCR に合わせ（PCR − 遅延）、あとは音声デバイスの時計で進める。
+                放送と音声デバイスの時計の差（数十 ppm）で遅延が減っていかないよう、音声をわずかに伸縮して
+                （decoder.c、swr_set_compensation）すべての時刻を同じだけずらし、遅延を保つ
   EPG.swift     番組データベース（EIT の取り込み、共通番組の解決、schedule の受信完了判定、保存）
   EPGCapture.swift          番組表の取得（チャンネル巡回）
   ProgramGuideWindow.swift  番組表ウインドウ（NSToolbar・NSSplitViewController のインスペクタ）
   ProgramGridView.swift     番組表のグリッドとチャンネル名・時刻の見出し
   ProgramDetailView.swift   インスペクタの番組詳細（SwiftUI）
+  Subtitles.swift           翻訳字幕（音声認識・翻訳、PTS に合わせた表示）
 Sources/tvprobe             コマンドラインの動作確認ツール
 ```
 
@@ -91,13 +108,22 @@ Sources/tvprobe             コマンドラインの動作確認ツール
 
 ```sh
 BONBORI_DEBUG=1 .build/release/Bonbori          # 選局時間・A/V の余裕・時計のずれのログ（時刻付き）を stderr に出す
+                                                # 翻訳字幕の到着と、再生に間に合ったか（lead が正なら間に合った）も出す
 BONBORI_DEBUG=1 BONBORI_ZAP_TEST=5 .build/release/Bonbori   # 5 秒ごとに自動でザッピングする
+BONBORI_DEBUG=1 BONBORI_DRIFT_TEST=3000 .build/release/Bonbori   # 時計が 3000ppm ずれた状態を再現して、遅延の補正を確かめる
 BONBORI_GUIDE=1 .build/release/Bonbori          # 起動時に番組表を開く（BONBORI_DEBUG=1 で番組表取得の各局の完了/タイムアウトも出す）
 .build/release/tvprobe <サーバーのアドレス> BonDriver-T 0 4 5   # コアだけで受信テスト（space 0 / ch 4 を 5 秒）
 REC=/tmp/out.ts .build/release/tvprobe <サーバーのアドレス> BonDriver-S 0 16 90 245   # 受信した TS をそのまま保存（解析用）
 ```
 
 旧名の `ITV_DEBUG` などの環境変数も、当面はそのまま使えます。
+
+遅延の補正（ずれの量と補正量）と PCR の飛びによる時計のやり直しは、環境変数なしでも macOS のログに残ります（ずれの量は 10 分ごとにも記録）。
+長時間再生の様子は次のコマンドで確認できます。
+
+```sh
+log show --last 1d --predicate 'subsystem == "net.ebycow.bonbori"'
+```
 
 ## 未実装
 

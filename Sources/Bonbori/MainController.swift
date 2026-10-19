@@ -18,6 +18,11 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     }()
     /// Channel to return to after 番組表の取得.
     private var captureReturn: Channel?
+    private lazy var subtitles: SubtitleController = {
+        let c = SubtitleController(player: player, view: videoView.subtitles)
+        c.onStatus = { [weak self] msg in self?.videoView.showHUD(msg, nil, duration: 6) }
+        return c
+    }()
 
     private var current: Channel?
     private var program: ProgramEvent?
@@ -33,6 +38,9 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     private var scanning = false
     private var lastTuneAt = Date()
     private var errorTimer: Timer?
+    /// Power assertion held while watching / recording (see updateSleepActivity).
+    private var sleepActivity: NSObjectProtocol?
+    private var sleepActivityOptions: ProcessInfo.ActivityOptions = []
 
     override init() {
         videoView = VideoView(layer: player.displayLayer)
@@ -63,6 +71,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     func start() {
         window.makeKeyAndOrderFront(nil)
         buildMenus()
+        applySubtitleSettings()
         if Settings.shared.host.isEmpty {
             DispatchQueue.main.async { [weak self] in self?.showSettings(nil) }
             return
@@ -118,11 +127,27 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             Settings.shared.lastChannelID = ch.id
         }
         videoView.setCenterMessage(nil)
+        subtitles.reset()
         player.tune(ch)
+        updateSubtitleSource()
         showChannelHUD()
         updateTitle()
         listPanel.reload()
         guideWindow?.currentChannelChanged()
+        updateSleepActivity()
+    }
+
+    /// While watching, keeps the display awake if 「視聴中はスリープしない」 is on. While recording or
+    /// capturing the EPG, keeps the system awake regardless (the display may still turn off).
+    private func updateSleepActivity() {
+        var opts: ProcessInfo.ActivityOptions = []
+        if current != nil && Settings.shared.preventSleep { opts.insert(.idleDisplaySleepDisabled) }
+        if player.isRecording || epgCapture.isRunning { opts.insert(.idleSystemSleepDisabled) }
+        guard opts != sleepActivityOptions else { return }
+        if let a = sleepActivity { ProcessInfo.processInfo.endActivity(a) }
+        sleepActivity = opts.isEmpty ? nil
+            : ProcessInfo.processInfo.beginActivity(options: opts, reason: "テレビの視聴・録画")
+        sleepActivityOptions = opts
     }
 
     private func zap(_ delta: Int) {
@@ -156,6 +181,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             let changed = program?.present?.event_id != p.present?.event_id
             program = p
             updateTitle()
+            if changed { updateSubtitleSource() }
             if changed && Date().timeIntervalSince(lastTuneAt) < 5 { showChannelHUD() }
         case TV_EV_STATUS.rawValue:
             status = decode(StatusEvent.self, json)
@@ -298,6 +324,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         case " ": showChannelHUD()
         case "r": toggleRecording(nil)
         case "p": capture(nil)
+        case "s": toggleSubtitles(nil)
         default: return false
         }
         return true
@@ -330,6 +357,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             let bytes = player.stopRecording()
             videoView.showHUD("録画停止", String(format: "%.1f MB", Double(bytes) / 1e6), duration: 3)
             updateTitle()
+            updateSleepActivity()
             return
         }
         let url = outputDir(.moviesDirectory).appendingPathComponent(fileStem() + ".ts")
@@ -339,6 +367,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             videoView.showHUD("録画を開始できませんでした", url.path, duration: 4)
         }
         updateTitle()
+        updateSleepActivity()
     }
 
     @objc func capture(_ sender: Any?) {
@@ -398,6 +427,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             captureReturn = nil
             videoView.showHUD("番組表を取得するチャンネルがありません", nil, duration: 3)
         }
+        updateSleepActivity()
     }
 
     /// Stops 番組表の取得 and returns to the channel that was being watched.
@@ -414,6 +444,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         }
         videoView.showHUD(completed ? "番組表の取得が完了しました" : "番組表の取得を中止しました", nil, duration: 3)
         guideWindow?.captureStateChanged()
+        updateSleepActivity()
     }
 
     private func epgCaptureProgressed() {
@@ -440,6 +471,76 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     @objc func toggleDeinterlace(_ sender: NSMenuItem) {
         let on = !Settings.shared.deinterlace
         player.setDeinterlace(on)
+    }
+
+    @objc func togglePreventSleep(_ sender: NSMenuItem) {
+        Settings.shared.preventSleep.toggle()
+        updateSleepActivity()
+        videoView.showHUD(Settings.shared.preventSleep ? "視聴中はスリープしない" : "視聴中もスリープする", nil, duration: 1.5)
+    }
+
+    // MARK: - 翻訳字幕
+
+    /// Starts or stops the subtitle engine and sets the output delay to match the settings.
+    private func applySubtitleSettings() {
+        let s = Settings.shared
+        if s.subtitles && SubtitleController.isSupported {
+            subtitles.start()
+            updateSubtitleSource()
+            player.setOutputDelay(s.subtitleSync ? s.subtitleDelay : 0)
+        } else {
+            subtitles.stop()
+            player.setOutputDelay(0)
+        }
+    }
+
+    /// 自動: the 副音声 (right) of a dual-mono program, which is where the original-language
+    /// commentary usually is; otherwise both channels.
+    private func updateSubtitleSource() {
+        var ch = Settings.shared.subtitleSource
+        if ch == 0 {
+            ch = 3
+            if let cur = current,
+               let ev = EPGStore.shared.schedules(for: [cur], from: Date()).first?.first(where: { $0.isOnAir() }),
+               ev.audio.contains(0x02) {
+                ch = 2
+            }
+        }
+        subtitles.channel = ch
+    }
+
+    @objc func toggleSubtitles(_ sender: Any?) {
+        guard SubtitleController.isSupported else {
+            videoView.showHUD("翻訳字幕には macOS 26 以降が必要です", nil, duration: 3)
+            return
+        }
+        Settings.shared.subtitles.toggle()
+        applySubtitleSettings()
+        let s = Settings.shared
+        if s.subtitles {
+            videoView.showHUD("翻訳字幕 オン", s.subtitleSync ? "映像を \(Int(s.subtitleDelay)) 秒遅らせて字幕に合わせます" : "字幕はできしだい表示します（数秒遅れます）", duration: 3)
+        } else {
+            videoView.showHUD("翻訳字幕 オフ", nil, duration: 1.5)
+        }
+    }
+
+    @objc func setSubtitleSync(_ sender: NSMenuItem) {
+        Settings.shared.subtitleSync = sender.tag == 1
+        if Settings.shared.subtitles { applySubtitleSettings() }
+    }
+
+    @objc func setSubtitleDelay(_ sender: NSMenuItem) {
+        Settings.shared.subtitleDelay = Double(sender.tag)
+        if Settings.shared.subtitles { applySubtitleSettings() }
+    }
+
+    @objc func setSubtitleSource(_ sender: NSMenuItem) {
+        Settings.shared.subtitleSource = sender.tag
+        updateSubtitleSource()
+    }
+
+    @objc func toggleSubtitleOriginal(_ sender: NSMenuItem) {
+        Settings.shared.subtitleShowOriginal.toggle()
     }
 
     @objc func toggleFloat(_ sender: NSMenuItem) {
@@ -592,6 +693,10 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         audioItem.submenu = makeAudioMenu()
         main.addItem(audioItem)
 
+        let subItem = NSMenuItem()
+        subItem.submenu = makeSubtitleMenu()
+        main.addItem(subItem)
+
         let winItem = NSMenuItem()
         let win = NSMenu(title: "ウインドウ")
         win.addItem(withTitle: "しまう", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
@@ -629,6 +734,9 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         let audioItem = NSMenuItem(title: "音声", action: nil, keyEquivalent: "")
         audioItem.submenu = makeAudioMenu()
         menu.addItem(audioItem)
+        let subItem = NSMenuItem(title: "字幕", action: nil, keyEquivalent: "")
+        subItem.submenu = makeSubtitleMenu()
+        menu.addItem(subItem)
         let viewItem = NSMenuItem(title: "表示", action: nil, keyEquivalent: "")
         let view = NSMenu(title: "表示")
         addDisplayOptionItems(to: view)
@@ -708,6 +816,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         menu.addItem(withTitle: "情報表示", action: #selector(toggleInfo(_:)), keyEquivalent: "i").target = self
         menu.addItem(withTitle: "インタレース解除 (bwdif)", action: #selector(toggleDeinterlace(_:)), keyEquivalent: "").target = self
         menu.addItem(withTitle: "常に手前に表示", action: #selector(toggleFloat(_:)), keyEquivalent: "t").target = self
+        menu.addItem(withTitle: "視聴中はスリープしない", action: #selector(togglePreventSleep(_:)), keyEquivalent: "").target = self
     }
 
     private func addRecordItems(to menu: NSMenu) {
@@ -734,6 +843,38 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         return audio
     }
 
+    private func makeSubtitleMenu() -> NSMenu {
+        let menu = NSMenu(title: "字幕")
+        menu.addItem(withTitle: "翻訳字幕（英語→日本語） (S)", action: #selector(toggleSubtitles(_:)), keyEquivalent: "").target = self
+        menu.addItem(.separator())
+        for (title, tag) in [("字幕をできしだい表示（映像は遅らせない）", 0), ("映像を遅らせて字幕に合わせる", 1)] {
+            let it = menu.addItem(withTitle: title, action: #selector(setSubtitleSync(_:)), keyEquivalent: "")
+            it.target = self
+            it.tag = tag
+        }
+        let delayItem = NSMenuItem(title: "映像を遅らせる時間", action: nil, keyEquivalent: "")
+        let delay = NSMenu()
+        for sec in [6, 8, 10, 12] {
+            let it = delay.addItem(withTitle: "\(sec) 秒", action: #selector(setSubtitleDelay(_:)), keyEquivalent: "")
+            it.target = self
+            it.tag = sec
+        }
+        delayItem.submenu = delay
+        menu.addItem(delayItem)
+        menu.addItem(.separator())
+        let srcItem = NSMenuItem(title: "認識する音声", action: nil, keyEquivalent: "")
+        let src = NSMenu()
+        for (title, tag) in [("自動（二重音声なら副音声）", 0), ("主音声（左）", 1), ("副音声（右）", 2), ("左右を混ぜる", 3)] {
+            let it = src.addItem(withTitle: title, action: #selector(setSubtitleSource(_:)), keyEquivalent: "")
+            it.target = self
+            it.tag = tag
+        }
+        srcItem.submenu = src
+        menu.addItem(srcItem)
+        menu.addItem(withTitle: "英語の原文も表示", action: #selector(toggleSubtitleOriginal(_:)), keyEquivalent: "").target = self
+        return menu
+    }
+
     /// Keeps check marks and titles current in both the menu bar and the right-click menu.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
@@ -749,6 +890,20 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             item.state = Settings.shared.deinterlace ? .on : .off
         case #selector(toggleFloat(_:)):
             item.state = window.level == .floating ? .on : .off
+        case #selector(togglePreventSleep(_:)):
+            item.state = Settings.shared.preventSleep ? .on : .off
+        case #selector(toggleSubtitles(_:)):
+            item.state = Settings.shared.subtitles ? .on : .off
+            return SubtitleController.isSupported
+        case #selector(setSubtitleSync(_:)):
+            item.state = (Settings.shared.subtitleSync ? 1 : 0) == item.tag ? .on : .off
+        case #selector(setSubtitleDelay(_:)):
+            item.state = Int(Settings.shared.subtitleDelay) == item.tag ? .on : .off
+            return Settings.shared.subtitleSync
+        case #selector(setSubtitleSource(_:)):
+            item.state = Settings.shared.subtitleSource == item.tag ? .on : .off
+        case #selector(toggleSubtitleOriginal(_:)):
+            item.state = Settings.shared.subtitleShowOriginal ? .on : .off
         case #selector(startScan(_:)):
             return !scanning
         case #selector(menuEPGCapture(_:)):

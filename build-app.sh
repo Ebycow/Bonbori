@@ -28,6 +28,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSApplicationCategoryType</key><string>public.app-category.entertainment</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSLocalNetworkUsageDescription</key><string>BonDriverProxyEx サーバーに接続してテレビ放送を受信します。</string>
+    <key>NSSpeechRecognitionUsageDescription</key><string>翻訳字幕のために、放送の音声をこの Mac 上で文字に起こします。</string>
 </dict>
 </plist>
 PLIST

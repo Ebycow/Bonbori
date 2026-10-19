@@ -67,8 +67,22 @@ typedef struct {
     void (*on_info)(void *ctx, int kind, const char *json);
 } tv_decoder_cb;
 
+// Presentation timeline of one generation: the broadcast timestamps plus the drift correction
+// accumulated by the audio decoder (see tv_session_set_drift_correction). Thread-safe; a newer
+// generation starts again from zero, an older one reads zero.
+typedef struct tv_timeline tv_timeline;
+tv_timeline *tv_timeline_create(void);
+void tv_timeline_destroy(tv_timeline *t);
+// Offset (90kHz) to add to the broadcast timestamps, and the requested correction (ppm).
+void tv_timeline_get(tv_timeline *t, uint32_t gen, int64_t *offset90k, int *ppm);
+void tv_timeline_set_offset(tv_timeline *t, uint32_t gen, int64_t offset90k);
+void tv_timeline_set_ppm(tv_timeline *t, uint32_t gen, int ppm);
+
 tv_decoder *tv_decoder_create(int kind, tv_decoder_cb cb);
 void tv_decoder_destroy(tv_decoder *d);
+// Call before pushing packets. Output timestamps follow `t`; with `correct`, this (audio) decoder
+// also resamples to apply the requested correction and records the resulting offset in `t`.
+void tv_decoder_set_timeline(tv_decoder *d, tv_timeline *t, bool correct);
 void tv_decoder_push(tv_decoder *d, int stream_type, const uint8_t *data, size_t len,
                      int64_t pts, int64_t dts, uint32_t gen);
 // Drop everything queued and reset codec state before processing packets of `gen`.

@@ -120,3 +120,64 @@ void tv_free(void *p)
 {
     free(p);
 }
+
+// ----------------------------------------------------------------- presentation timeline
+struct tv_timeline {
+    pthread_mutex_t mtx;
+    uint32_t gen;
+    int64_t offset;
+    int ppm;
+};
+
+tv_timeline *tv_timeline_create(void)
+{
+    tv_timeline *t = calloc(1, sizeof(*t));
+    pthread_mutex_init(&t->mtx, NULL);
+    return t;
+}
+
+void tv_timeline_destroy(tv_timeline *t)
+{
+    if (!t)
+        return;
+    pthread_mutex_destroy(&t->mtx);
+    free(t);
+}
+
+// Caller holds the lock. False for an older generation; a newer one starts from zero.
+static bool timeline_enter(tv_timeline *t, uint32_t gen)
+{
+    if (gen == t->gen)
+        return true;
+    if ((int32_t)(gen - t->gen) < 0)
+        return false;
+    t->gen = gen;
+    t->offset = 0;
+    t->ppm = 0;
+    return true;
+}
+
+void tv_timeline_get(tv_timeline *t, uint32_t gen, int64_t *offset90k, int *ppm)
+{
+    pthread_mutex_lock(&t->mtx);
+    bool cur = timeline_enter(t, gen);
+    *offset90k = cur ? t->offset : 0;
+    *ppm = cur ? t->ppm : 0;
+    pthread_mutex_unlock(&t->mtx);
+}
+
+void tv_timeline_set_offset(tv_timeline *t, uint32_t gen, int64_t offset90k)
+{
+    pthread_mutex_lock(&t->mtx);
+    if (timeline_enter(t, gen))
+        t->offset = offset90k;
+    pthread_mutex_unlock(&t->mtx);
+}
+
+void tv_timeline_set_ppm(tv_timeline *t, uint32_t gen, int ppm)
+{
+    pthread_mutex_lock(&t->mtx);
+    if (timeline_enter(t, gen))
+        t->ppm = ppm;
+    pthread_mutex_unlock(&t->mtx);
+}

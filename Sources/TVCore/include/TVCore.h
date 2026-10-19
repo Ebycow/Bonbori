@@ -37,10 +37,14 @@ typedef struct {
     // Called on decoder threads. Callee must CFRetain if it keeps the buffer.
     void (*on_video)(void *ctx, CMSampleBufferRef sb, uint32_t gen);
     void (*on_audio)(void *ctx, CMSampleBufferRef sb, uint32_t gen);
-    // Unwrapped PCR of the selected service in 90kHz units (network thread, ~10Hz).
+    // Unwrapped PCR of the selected service in 90kHz units (network thread, ~10Hz), on the same
+    // timeline as the sample buffers (see tv_session_set_drift_correction).
     void (*on_clock)(void *ctx, int64_t pcr90k, uint32_t gen);
     // Called on the network thread.
     void (*on_event)(void *ctx, int type, const char *json);
+    // Audio tap (see tv_session_set_audio_tap), on its own decoder thread. Same format and
+    // timeline as on_audio, but both channels as broadcast and never delayed.
+    void (*on_tap_audio)(void *ctx, CMSampleBufferRef sb, uint32_t gen);
 } tv_callbacks;
 
 tv_session *tv_session_create(tv_callbacks cb);
@@ -64,6 +68,18 @@ void tv_session_select_service(tv_session *s, uint16_t sid);
 // Audio: index of audio ES in the PMT; dual-mono: 0 = stereo/main, 1 = left, 2 = right.
 void tv_session_set_audio(tv_session *s, int es_index, int dual_mono_mode);
 void tv_session_set_deinterlace(tv_session *s, bool on);
+// Decodes the selected audio ES a second time for on_tap_audio (used for speech recognition).
+void tv_session_set_audio_tap(tv_session *s, bool on);
+// Holds video, audio and the clock back by `ms` before decoding (0 = off), so that work done on
+// the audio tap can finish before the picture is shown. Drops what is queued and starts a new
+// generation, which is returned.
+uint32_t tv_session_set_output_delay(tv_session *s, int ms);
+// Corrects the drift between the broadcast clock and the audio device that plays it, without
+// touching the playback clock: the decoded audio is resampled ppm longer (ppm > 0) or shorter
+// (ppm < 0), and video, audio and on_clock timestamps all move later (or earlier) by the same
+// amount, so the delay grows (or shrinks) by ppm while the picture stays in sync. Applies to
+// generation `gen` only; a newer one starts at 0 with no offset.
+void tv_session_set_drift_correction(tv_session *s, uint32_t gen, int ppm);
 // Bitmask: 1 = request server-side B25 descrambling (eDesireToUseB25).
 void tv_session_set_options(tv_session *s, int opts);
 

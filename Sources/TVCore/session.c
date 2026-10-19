@@ -78,6 +78,18 @@ struct tv_session {
 
     tv_demux *dmx;
     tv_decoder *vdec, *adec;
+    tv_decoder *tapdec;  // second audio decoder for on_tap_audio
+    tv_timeline *timeline;
+    atomic_bool tap_on;
+
+    // Output delay line: PES and PCR wait here before reaching the decoders / on_clock.
+    atomic_int delay_ms;
+    pthread_mutex_t dl_mtx;
+    pthread_cond_t dl_cond;
+    struct dl_item *dl_head, *dl_tail;
+    size_t dl_bytes;
+    bool dl_quit;
+    pthread_t dl_thread;
 
     float signal;
     uint64_t bytes;
@@ -89,12 +101,126 @@ struct tv_session {
     int64_t last_clock;
 };
 
+// ----------------------------------------------------------------- output delay line
+enum { DL_PCR = 2 };  // besides PES_VIDEO / PES_AUDIO
+
+typedef struct dl_item {
+    struct dl_item *next;
+    int64_t due;  // now_ms() time to release
+    int kind, stream_type;
+    int64_t pts, dts;  // PCR in pts for DL_PCR
+    uint32_t gen;
+    size_t len;
+    uint8_t data[];
+} dl_item;
+
+#define DL_MAX_BYTES (96u * 1024 * 1024)
+
+static void dl_clear_locked(tv_session *s)
+{
+    while (s->dl_head) {
+        dl_item *o = s->dl_head;
+        s->dl_head = o->next;
+        free(o);
+    }
+    s->dl_tail = NULL;
+    s->dl_bytes = 0;
+}
+
+static void dl_push(tv_session *s, int delay, int kind, int st, const uint8_t *data, size_t len, int64_t pts,
+                    int64_t dts, uint32_t gen)
+{
+    dl_item *it = malloc(sizeof(dl_item) + len);
+    it->next = NULL;
+    it->due = now_ms() + delay;
+    it->kind = kind;
+    it->stream_type = st;
+    it->pts = pts;
+    it->dts = dts;
+    it->gen = gen;
+    it->len = len;
+    if (len)
+        memcpy(it->data, data, len);
+    pthread_mutex_lock(&s->dl_mtx);
+    if (s->dl_tail)
+        s->dl_tail->next = it;
+    else
+        s->dl_head = it;
+    s->dl_tail = it;
+    s->dl_bytes += len;
+    while (s->dl_bytes > DL_MAX_BYTES && s->dl_head != it) {
+        dl_item *o = s->dl_head;
+        s->dl_head = o->next;
+        s->dl_bytes -= o->len;
+        free(o);
+    }
+    pthread_cond_signal(&s->dl_cond);
+    pthread_mutex_unlock(&s->dl_mtx);
+}
+
+static void deliver(tv_session *s, int kind, int st, const uint8_t *data, size_t len, int64_t pts, int64_t dts,
+                    uint32_t gen)
+{
+    if (kind == DL_PCR) {
+        int64_t off;
+        int ppm;
+        tv_timeline_get(s->timeline, gen, &off, &ppm);
+        if (s->cb.on_clock)
+            s->cb.on_clock(s->cb.ctx, pts + off, gen);
+        return;
+    }
+    tv_decoder_push(kind == PES_VIDEO ? s->vdec : s->adec, st, data, len, pts, dts, gen);
+}
+
+static void *dl_thread(void *arg)
+{
+    tv_session *s = arg;
+    pthread_setname_np("tv.delay");
+    pthread_mutex_lock(&s->dl_mtx);
+    for (;;) {
+        while (!s->dl_quit && !s->dl_head)
+            pthread_cond_wait(&s->dl_cond, &s->dl_mtx);
+        if (s->dl_quit)
+            break;
+        int64_t wait = s->dl_head->due - now_ms();
+        if (wait > 0) {
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_sec += wait / 1000;
+            ts.tv_nsec += (long)(wait % 1000) * 1000000L;
+            if (ts.tv_nsec >= 1000000000L) {
+                ts.tv_sec++;
+                ts.tv_nsec -= 1000000000L;
+            }
+            pthread_cond_timedwait(&s->dl_cond, &s->dl_mtx, &ts);
+            continue;
+        }
+        dl_item *it = s->dl_head;
+        s->dl_head = it->next;
+        if (!s->dl_head)
+            s->dl_tail = NULL;
+        s->dl_bytes -= it->len;
+        pthread_mutex_unlock(&s->dl_mtx);
+        deliver(s, it->kind, it->stream_type, it->data, it->len, it->pts, it->dts, it->gen);
+        free(it);
+        pthread_mutex_lock(&s->dl_mtx);
+    }
+    pthread_mutex_unlock(&s->dl_mtx);
+    return NULL;
+}
+
 // ----------------------------------------------------------------- pipeline callbacks
 static void on_pes(void *ctx, int kind, int st, const uint8_t *data, size_t len, int64_t pts, int64_t dts)
 {
     tv_session *s = ctx;
-    tv_decoder *d = kind == PES_VIDEO ? s->vdec : s->adec;
-    tv_decoder_push(d, st, data, len, pts, dts, atomic_load(&s->gen));
+    uint32_t gen = atomic_load(&s->gen);
+    if (kind == PES_AUDIO && atomic_load(&s->tap_on))
+        tv_decoder_push(s->tapdec, st, data, len, pts, dts, gen);
+    int delay = atomic_load(&s->delay_ms);
+    if (delay > 0)
+        dl_push(s, delay, kind, st, data, len, pts, dts, gen);
+    else
+        deliver(s, kind, st, data, len, pts, dts, gen);
 }
 
 static void on_pcr(void *ctx, int64_t pcr)
@@ -103,8 +229,11 @@ static void on_pcr(void *ctx, int64_t pcr)
     if (s->last_clock != TV_NOPTS && pcr >= s->last_clock && pcr - s->last_clock < 9000)
         return;
     s->last_clock = pcr;
-    if (s->cb.on_clock)
-        s->cb.on_clock(s->cb.ctx, pcr, atomic_load(&s->gen));
+    int delay = atomic_load(&s->delay_ms);
+    if (delay > 0)
+        dl_push(s, delay, DL_PCR, 0, NULL, 0, pcr, TV_NOPTS, atomic_load(&s->gen));
+    else
+        deliver(s, DL_PCR, 0, NULL, 0, pcr, TV_NOPTS, atomic_load(&s->gen));
 }
 
 static void on_dmx_event(void *ctx, int type, const char *json)
@@ -114,12 +243,17 @@ static void on_dmx_event(void *ctx, int type, const char *json)
         s->cb.on_event(s->cb.ctx, type, json);
 }
 
-static void bump_generation(tv_session *s)
+static uint32_t bump_generation(tv_session *s)
 {
     uint32_t g = atomic_fetch_add(&s->gen, 1) + 1;
+    pthread_mutex_lock(&s->dl_mtx);
+    dl_clear_locked(s);
+    pthread_mutex_unlock(&s->dl_mtx);
     tv_decoder_flush(s->vdec, g);
     tv_decoder_flush(s->adec, g);
+    tv_decoder_flush(s->tapdec, g);
     s->last_clock = TV_NOPTS;
+    return g;
 }
 
 static void on_service_switch(void *ctx, int sid)
@@ -140,6 +274,13 @@ static void on_dec_audio(void *ctx, void *sb, uint32_t gen)
     tv_session *s = ctx;
     if (s->cb.on_audio)
         s->cb.on_audio(s->cb.ctx, (CMSampleBufferRef)sb, gen);
+}
+
+static void on_dec_tap_audio(void *ctx, void *sb, uint32_t gen)
+{
+    tv_session *s = ctx;
+    if (s->cb.on_tap_audio)
+        s->cb.on_tap_audio(s->cb.ctx, (CMSampleBufferRef)sb, gen);
 }
 
 static void on_dec_info(void *ctx, int kind, const char *json)
@@ -177,6 +318,15 @@ tv_session *tv_session_create(tv_callbacks cb)
     tv_decoder_cb vcb = {s, on_dec_video, on_dec_audio, on_dec_info};
     s->vdec = tv_decoder_create(PES_VIDEO, vcb);
     s->adec = tv_decoder_create(PES_AUDIO, vcb);
+    tv_decoder_cb tcb = {s, NULL, on_dec_tap_audio, NULL};
+    s->tapdec = tv_decoder_create(PES_AUDIO, tcb);
+    s->timeline = tv_timeline_create();
+    tv_decoder_set_timeline(s->vdec, s->timeline, false);
+    tv_decoder_set_timeline(s->adec, s->timeline, true);
+    tv_decoder_set_timeline(s->tapdec, s->timeline, false);
+    pthread_mutex_init(&s->dl_mtx, NULL);
+    pthread_cond_init(&s->dl_cond, NULL);
+    pthread_create(&s->dl_thread, NULL, dl_thread, s);
     return s;
 }
 
@@ -187,8 +337,18 @@ void tv_session_destroy(tv_session *s)
     tv_session_close(s);
     tv_session_record_stop(s);
     pthread_mutex_destroy(&s->rec_mtx);
+    pthread_mutex_lock(&s->dl_mtx);
+    s->dl_quit = true;
+    dl_clear_locked(s);
+    pthread_cond_signal(&s->dl_cond);
+    pthread_mutex_unlock(&s->dl_mtx);
+    pthread_join(s->dl_thread, NULL);
+    pthread_mutex_destroy(&s->dl_mtx);
+    pthread_cond_destroy(&s->dl_cond);
     tv_decoder_destroy(s->vdec);
     tv_decoder_destroy(s->adec);
+    tv_decoder_destroy(s->tapdec);
+    tv_timeline_destroy(s->timeline);
     tv_demux_destroy(s->dmx);
     free(s->resp);
     pthread_mutex_destroy(&s->api_mtx);
@@ -677,6 +837,22 @@ void tv_session_set_audio(tv_session *s, int es_index, int dual_mono_mode)
 void tv_session_set_deinterlace(tv_session *s, bool on)
 {
     tv_decoder_set_deinterlace(s->vdec, on);
+}
+
+void tv_session_set_audio_tap(tv_session *s, bool on)
+{
+    atomic_store(&s->tap_on, on);
+}
+
+uint32_t tv_session_set_output_delay(tv_session *s, int ms)
+{
+    atomic_store(&s->delay_ms, ms > 0 ? ms : 0);
+    return bump_generation(s);
+}
+
+void tv_session_set_drift_correction(tv_session *s, uint32_t gen, int ppm)
+{
+    tv_timeline_set_ppm(s->timeline, gen, ppm);
 }
 
 void tv_session_set_options(tv_session *s, int opts)
