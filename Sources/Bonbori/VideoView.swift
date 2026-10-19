@@ -15,6 +15,7 @@ final class VideoView: NSView {
     let subHud = OverlayLabel(fontSize: 15, weight: .regular)
     let infoBar = OverlayLabel(fontSize: 12, weight: .regular, mono: true)
     let centerMessage = OverlayLabel(fontSize: 16, weight: .medium)
+    let subtitles = SubtitleOverlay(frame: .zero)
     private var hudTimer: Timer?
 
     init(layer: AVSampleBufferDisplayLayer) {
@@ -30,6 +31,7 @@ final class VideoView: NSView {
         // composites the layer itself (e.g. during screen recording). A not-quite-opaque
         // layer is composited instead (seen on M1 + Pro Display XDR, macOS 27).
         displayLayer.opacity = 0.995
+        addSubview(subtitles)
         for v in [hud, subHud, infoBar, centerMessage] {
             addSubview(v)
             v.isHidden = true
@@ -50,6 +52,7 @@ final class VideoView: NSView {
         if h > b.height { h = b.height; w = h * displayAspect }
         displayLayer.frame = CGRect(x: (b.width - w) / 2, y: (b.height - h) / 2, width: w, height: h)
         CATransaction.commit()
+        subtitles.place(in: displayLayer.frame)
 
         let pad: CGFloat = 16
         let maxW = b.width - pad * 2

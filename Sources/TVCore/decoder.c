@@ -46,6 +46,8 @@ struct tv_decoder {
 
     atomic_bool deinterlace;
     atomic_int dual_mono;
+    tv_timeline *tl;
+    bool correct;  // this decoder applies the drift correction (see tv_decoder_set_timeline)
 
     // codec state (decoder thread only)
     int stream_type;
@@ -76,7 +78,12 @@ struct tv_decoder {
     int swr_in_rate, swr_in_fmt;
     CMAudioFormatDescriptionRef afmt;
     int afmt_rate;
-    int64_t next_apts;
+    int64_t next_as;  // expected start of the next audio frame, in samples at next_as_rate
+    int next_as_rate;
+    // drift correction: swr compensation is on, fraction of a sample still to add, samples added so far
+    bool comp_on;
+    double comp_acc;
+    int64_t comp_samples;
     float *abuf;
     int abuf_cap;
     int info_ch, info_rate;
@@ -156,6 +163,12 @@ void tv_decoder_set_dual_mono(tv_decoder *d, int mode)
     atomic_store(&d->dual_mono, mode);
 }
 
+void tv_decoder_set_timeline(tv_decoder *d, tv_timeline *t, bool correct)
+{
+    d->tl = t;
+    d->correct = correct;
+}
+
 // ----------------------------------------------------------------- codec setup
 static void free_graph(tv_decoder *d)
 {
@@ -220,7 +233,7 @@ static bool open_codec(tv_decoder *d, int st)
     d->parser = av_parser_init(id);
     d->stream_type = st;
     d->seen_key = false;
-    d->next_apts = TV_NOPTS;
+    d->next_as = TV_NOPTS;
     return true;
 }
 
@@ -234,7 +247,13 @@ static void reset_state(tv_decoder *d)
     }
     free_graph(d);
     d->seen_key = false;
-    d->next_apts = TV_NOPTS;
+    d->next_as = TV_NOPTS;
+    // the resampler holds a few samples of the old stream
+    if (d->comp_on)
+        swr_free(&d->swr);
+    d->comp_on = false;
+    d->comp_acc = 0;
+    d->comp_samples = 0;
 }
 
 // ----------------------------------------------------------------- video output
@@ -401,7 +420,11 @@ static void output_video(tv_decoder *d, AVFrame *f, int64_t pts90k, uint32_t gen
     }
     if (!d->vfmt)
         CMVideoFormatDescriptionCreateForImageBuffer(NULL, pb, &d->vfmt);
-    CMSampleTimingInfo ti = {kCMTimeInvalid, CMTimeMake(pts90k, 90000), kCMTimeInvalid};
+    int64_t off = 0;
+    int ppm;
+    if (d->tl)
+        tv_timeline_get(d->tl, gen, &off, &ppm);
+    CMSampleTimingInfo ti = {kCMTimeInvalid, CMTimeMake(pts90k + off, 90000), kCMTimeInvalid};
     CMSampleBufferRef sb = NULL;
     if (d->vfmt && CMSampleBufferCreateReadyWithImageBuffer(NULL, pb, d->vfmt, &ti, &sb) == noErr) {
         if (d->cb.on_video)
@@ -495,7 +518,21 @@ static void handle_audio_frame(tv_decoder *d, AVFrame *f, uint32_t gen)
         av_channel_layout_copy(&d->swr_in_layout, &f->ch_layout);
         d->swr_in_rate = rate;
         d->swr_in_fmt = f->format;
+        d->comp_on = false;
     }
+    int64_t off = 0;
+    int ppm = 0;
+    if (d->tl)
+        tv_timeline_get(d->tl, gen, &off, &ppm);
+    // Drift correction: resample to ppm more (or fewer) samples, spread over each frame.
+    int delta = 0;
+    if (d->correct && ppm) {
+        d->comp_acc += (double)f->nb_samples * ppm / 1e6;
+        delta = (int)d->comp_acc;
+        d->comp_acc -= delta;
+    }
+    if ((delta || d->comp_on) && swr_set_compensation(d->swr, delta, delta ? f->nb_samples + delta : 0) >= 0)
+        d->comp_on = true;
     int cap = f->nb_samples + 256;
     if (d->abuf_cap < cap) {
         d->abuf = realloc(d->abuf, (size_t)cap * 2 * sizeof(float));
@@ -514,12 +551,22 @@ static void handle_audio_frame(tv_decoder *d, AVFrame *f, uint32_t gen)
         }
     }
 
+    // Start in samples on the presentation timeline; consecutive frames stay sample-exact.
     int64_t pts = frame_pts(f);
-    if (d->next_apts != TV_NOPTS && (pts == TV_NOPTS || llabs(pts - d->next_apts) < 90000 / 5))  // 200ms, as LibISDB's MAX_JITTER
-        pts = d->next_apts;
-    if (pts == TV_NOPTS)
+    int64_t start = TV_NOPTS;
+    if (pts != TV_NOPTS)
+        start = av_rescale(pts, rate, 90000) + (d->correct ? d->comp_samples : av_rescale(off, rate, 90000));
+    if (d->next_as != TV_NOPTS && d->next_as_rate == rate &&
+        (start == TV_NOPTS || llabs(start - d->next_as) < rate / 5))  // 200ms, as LibISDB's MAX_JITTER
+        start = d->next_as;
+    if (d->correct && d->comp_on) {
+        d->comp_samples += n - f->nb_samples;
+        tv_timeline_set_offset(d->tl, gen, av_rescale(d->comp_samples, 90000, rate));
+    }
+    if (start == TV_NOPTS)
         return;
-    d->next_apts = pts + (int64_t)n * 90000 / rate;
+    d->next_as = start + n;
+    d->next_as_rate = rate;
 
     if (!d->afmt || d->afmt_rate != rate) {
         if (d->afmt)
@@ -548,8 +595,7 @@ static void handle_audio_frame(tv_decoder *d, AVFrame *f, uint32_t gen)
         return;
     CMBlockBufferReplaceDataBytes(d->abuf, bb, 0, bytes);
     CMSampleBufferRef sb = NULL;
-    // Use the sample rate as timescale so consecutive buffers are sample-exact.
-    CMTime t = CMTimeConvertScale(CMTimeMake(pts, 90000), rate, kCMTimeRoundingMethod_Default);
+    CMTime t = CMTimeMake(start, rate);
     if (CMAudioSampleBufferCreateReadyWithPacketDescriptions(NULL, bb, d->afmt, n, t, NULL, &sb) == noErr) {
         if (d->cb.on_audio)
             d->cb.on_audio(d->cb.ctx, sb, gen);
@@ -660,7 +706,7 @@ tv_decoder *tv_decoder_create(int kind, tv_decoder_cb cb)
     d->kind = kind;
     d->cb = cb;
     d->stream_type = -1;
-    d->next_apts = TV_NOPTS;
+    d->next_as = TV_NOPTS;
     atomic_init(&d->deinterlace, true);
     atomic_init(&d->dual_mono, 0);
     d->pkt = av_packet_alloc();

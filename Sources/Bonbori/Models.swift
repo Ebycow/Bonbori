@@ -147,6 +147,36 @@ final class Settings {
         get { d.object(forKey: "deinterlace") == nil ? true : d.bool(forKey: "deinterlace") }
         set { d.set(newValue, forKey: "deinterlace") }
     }
+    /// Keep the display awake while watching.
+    var preventSleep: Bool {
+        get { d.object(forKey: "preventSleep") == nil ? true : d.bool(forKey: "preventSleep") }
+        set { d.set(newValue, forKey: "preventSleep") }
+    }
+    /// 翻訳字幕 (English speech recognized and translated into Japanese).
+    var subtitles: Bool {
+        get { d.bool(forKey: "subtitles") }
+        set { d.set(newValue, forKey: "subtitles") }
+    }
+    /// Hold the picture back so that subtitles appear with the speech (otherwise they come late).
+    var subtitleSync: Bool {
+        get { d.bool(forKey: "subtitleSync") }
+        set { d.set(newValue, forKey: "subtitleSync") }
+    }
+    /// Seconds the picture is held back when subtitleSync is on.
+    var subtitleDelay: Double {
+        get { d.object(forKey: "subtitleDelay") == nil ? 8 : d.double(forKey: "subtitleDelay") }
+        set { d.set(newValue, forKey: "subtitleDelay") }
+    }
+    /// Audio to recognize: 0 = auto (副音声 for dual-mono programs, else both), 1 = 主 (left), 2 = 副 (right), 3 = both mixed.
+    var subtitleSource: Int {
+        get { d.integer(forKey: "subtitleSource") }
+        set { d.set(newValue, forKey: "subtitleSource") }
+    }
+    /// Show the recognized English under the translation.
+    var subtitleShowOriginal: Bool {
+        get { d.object(forKey: "subtitleShowOriginal") == nil ? true : d.bool(forKey: "subtitleShowOriginal") }
+        set { d.set(newValue, forKey: "subtitleShowOriginal") }
+    }
     /// Include terrestrial/BS sub-channels (e.g. NHK総合2) when zapping.
     var showSubChannels: Bool {
         get { d.bool(forKey: "showSubChannels") }
