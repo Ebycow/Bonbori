@@ -2,14 +2,17 @@
 import AppKit
 import SwiftUI
 
-/// 番組表 window: the guide grid with a SwiftUI inspector for the selected program.
+/// 番組表 window: the guide grid with a SwiftUI inspector for the selected program, and the list of
+/// programs that match the search on the left while searching.
 final class ProgramGuideWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate, NSSearchFieldDelegate {
     private weak var controller: MainController?
     private let guide = ProgramGuideView()
     private var grid: ProgramGridView { guide.grid }
     private var scroll: NSScrollView { guide.scrollView }
     private let detail = ProgramDetailModel()
+    private let search = ProgramSearchModel()
     private let split = NSSplitViewController()
+    private var results: NSSplitViewItem!
     private var inspector: NSSplitViewItem!
     private var kind: SpaceKind = .terrestrial
     private var days: [Date] = []
@@ -38,6 +41,15 @@ final class ProgramGuideWindowController: NSWindowController, NSWindowDelegate, 
 
         grid.hourHeight = CGFloat(UserDefaults.standard.object(forKey: "guideHourHeight") as? Double ?? 180)
 
+        let resultsHosting = NSHostingController(rootView: ProgramSearchView(model: search))
+        resultsHosting.sizingOptions = []
+        results = NSSplitViewItem(sidebarWithViewController: resultsHosting)
+        results.minimumThickness = 220
+        results.maximumThickness = 400
+        results.canCollapse = true
+        results.isCollapsed = true
+        split.addSplitViewItem(results)
+
         let gridVC = NSViewController()
         gridVC.view = guide
         let gridItem = NSSplitViewItem(viewController: gridVC)
@@ -51,7 +63,7 @@ final class ProgramGuideWindowController: NSWindowController, NSWindowDelegate, 
         inspector.maximumThickness = 460
         inspector.canCollapse = true
         split.addSplitViewItem(inspector)
-        split.splitView.autosaveName = "ProgramGuideSplit"
+        split.splitView.autosaveName = "ProgramGuideSplit3"
         window.contentViewController = split
         window.setContentSize(NSSize(width: 1180, height: 760))
         window.setFrameAutosaveName("ProgramGuide")
@@ -69,16 +81,20 @@ final class ProgramGuideWindowController: NSWindowController, NSWindowDelegate, 
         datePopup.action = #selector(dateChanged(_:))
 
         grid.onSelect = { [weak self] ch, ev in
-            self?.detail.channel = ch
-            self?.detail.event = ev
-        }
-        grid.onActivate = { [weak self] ch, ev in
             guard let self else { return }
-            if ev.isOnAir() { self.controller?.tune(ch) } else { self.showInspector() }
+            self.detail.channel = ch
+            self.detail.event = ev
+            self.search.selection = ev.map { ProgramSearchResult(channel: ch, event: $0).id }
         }
+        grid.onActivate = { [weak self] ch, ev in self?.activate(ch, ev) }
         grid.onTuneChannel = { [weak self] ch in self?.controller?.tune(ch) }
         grid.onShowDetail = { [weak self] in self?.showInspector() }
         detail.onWatch = { [weak self] ch in self?.controller?.tune(ch) }
+        search.onPick = { [weak self] r in self?.reveal(r) }
+        search.onActivate = { [weak self] r in
+            self?.reveal(r)
+            self?.activate(r.channel, r.event)
+        }
 
         observers.append(NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main) { [weak self] _ in
             self?.visibleTimeChanged()
@@ -100,6 +116,7 @@ final class ProgramGuideWindowController: NSWindowController, NSWindowDelegate, 
     func show() {
         let firstTime = window?.isVisible != true
         if firstTime, let k = controller?.currentChannel?.kind { setKind(k) }
+        if firstTime { results.isCollapsed = search.query.isEmpty }
         reload()
         showWindow(nil)
         window?.makeFirstResponder(grid)
@@ -110,6 +127,7 @@ final class ProgramGuideWindowController: NSWindowController, NSWindowDelegate, 
             // the current-time line moves and programs end
             self.grid.needsDisplay = true
             self.grid.rulersNeedDisplay()
+            if !self.search.query.isEmpty { self.search.search(self.search.query) }
         }
     }
 
@@ -145,6 +163,7 @@ final class ProgramGuideWindowController: NSWindowController, NSWindowDelegate, 
                 datePopup.addItem(withTitle: prefix + ProgramGuideWindowController.dayTitle.string(from: d))
             }
         }
+        search.search(search.query)
         visibleTimeChanged()
         updateSubtitle()
     }
@@ -207,6 +226,22 @@ final class ProgramGuideWindowController: NSWindowController, NSWindowDelegate, 
         if inspector.isCollapsed { inspector.animator().isCollapsed = false }
     }
 
+    private func activate(_ ch: Channel, _ ev: EPGEvent) {
+        if ev.isOnAir() { controller?.tune(ch) } else { showInspector() }
+    }
+
+    /// Selects a search result in the grid, switching to its kind of broadcast if needed.
+    private func reveal(_ r: ProgramSearchResult) {
+        if r.channel.kind != kind {
+            setKind(r.channel.kind)
+            grid.clearSelection()
+            reload()
+        }
+        guard let c = grid.columns.firstIndex(where: { $0.channel.id == r.channel.id }),
+              let i = grid.columns[c].events.firstIndex(where: { $0.id == r.event.id }) else { return }
+        grid.select(column: c, index: i)
+    }
+
     // MARK: - Actions
 
     @objc private func kindChanged(_ sender: NSSegmentedControl) {
@@ -258,12 +293,22 @@ final class ProgramGuideWindowController: NSWindowController, NSWindowDelegate, 
 
     func controlTextDidChange(_ obj: Notification) {
         guard let field = obj.object as? NSSearchField else { return }
-        grid.query = field.stringValue.trimmingCharacters(in: .whitespaces)
+        setQuery(field.stringValue)
     }
 
     @objc private func searchSubmitted(_ sender: NSSearchField) {
-        grid.query = sender.stringValue.trimmingCharacters(in: .whitespaces)
+        setQuery(sender.stringValue)
         grid.selectNextMatch()
+    }
+
+    private func setQuery(_ text: String) {
+        let q = text.trimmingCharacters(in: .whitespaces)
+        guard q != search.query else { return }
+        let wasSearching = !search.query.isEmpty
+        grid.query = q
+        search.search(q)
+        // the list opens when a search starts and closes when it is cleared; in between it is the user's
+        if q.isEmpty == wasSearching { results.animator().isCollapsed = q.isEmpty }
     }
 
     // MARK: - Toolbar

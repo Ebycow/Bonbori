@@ -105,8 +105,7 @@ final class ProgramGridView: NSView {
 
     private func updateMatches() {
         matches = query.isEmpty ? [] : Set(columns.flatMap { col in
-            col.events.filter { $0.title.localizedCaseInsensitiveContains(query) || $0.text.localizedCaseInsensitiveContains(query) }
-                .map { "\(col.channel.id)#\($0.id)" }
+            col.events.filter { $0.matches(query) }.map { "\(col.channel.id)#\($0.id)" }
         })
     }
 
