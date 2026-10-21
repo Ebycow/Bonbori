@@ -28,6 +28,11 @@ struct EPGEvent: Codable, Hashable {
         let t = Int64(now.timeIntervalSince1970)
         return start <= t && (duration < 0 ? t < start + 3600 : t < end)
     }
+
+    /// Whether the program guide's search finds this program.
+    func matches(_ query: String) -> Bool {
+        title.localizedCaseInsensitiveContains(query) || text.localizedCaseInsensitiveContains(query)
+    }
 }
 
 /// ARIB STD-B10 content_nibble_level_1 (names from TVTest's EpgUtil).
