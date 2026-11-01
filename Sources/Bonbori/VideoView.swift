@@ -71,16 +71,17 @@ final class VideoView: NSView {
                                              y: (b.height - centerMessage.frame.height) / 2)
     }
 
-    /// Puts a plugin's view over the picture, keeping it the size of the picture.
-    func addPluginOverlay(_ view: NSView) {
-        view.frame = pluginOverlays.bounds
-        view.autoresizingMask = [.width, .height]
-        pluginOverlays.addSubview(view)
+    /// A view the size of the picture for one plugin's overlays, above those of the plugins before it.
+    func makePluginOverlayHost() -> NSView {
+        let host = PassthroughView(frame: pluginOverlays.bounds)
+        host.autoresizingMask = [.width, .height]
+        pluginOverlays.addSubview(host)
+        return host
     }
 
     /// `image` (a captured frame) with the plugin overlays as they are on screen now.
     func compositingPluginOverlays(on image: CGImage) -> CGImage {
-        guard !pluginOverlays.subviews.isEmpty, let overlays = pluginOverlays.layer,
+        guard pluginOverlays.subviews.contains(where: { !$0.subviews.isEmpty }), let overlays = pluginOverlays.layer,
               let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: image.colorSpace ?? CGColorSpaceCreateDeviceRGB(),
                                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)

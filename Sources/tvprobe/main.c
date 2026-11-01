@@ -72,6 +72,24 @@ static void on_clock(void *ctx, int64_t pcr, uint32_t gen)
     last_pcr = pcr;
 }
 
+// CAPDUMP=path: saves the caption PES as records [superimpose:1][pts:8][len:4][data], host byte order.
+static FILE *cap_dump;
+static atomic_int ncaption;
+
+static void on_caption(void *ctx, bool superimpose, const uint8_t *data, size_t len, int64_t pts, uint32_t gen)
+{
+    (void)ctx;
+    (void)gen;
+    atomic_fetch_add(&ncaption, 1);
+    uint8_t kind = superimpose;
+    uint32_t n = (uint32_t)len;
+    fwrite(&kind, 1, 1, cap_dump);
+    fwrite(&pts, 8, 1, cap_dump);
+    fwrite(&n, 4, 1, cap_dump);
+    fwrite(data, 1, len, cap_dump);
+    fflush(cap_dump);
+}
+
 static int eit_sections, eit_samples;
 static int eit_by_tid[256];
 
@@ -108,7 +126,12 @@ int main(int argc, char **argv)
     int secs = argc > 5 ? atoi(argv[5]) : 5;
     int sid = argc > 6 ? atoi(argv[6]) : 0;
     tv_callbacks cb = {NULL, on_video, on_audio, on_clock, on_event};
+    if (getenv("CAPDUMP")) {
+        cap_dump = fopen(getenv("CAPDUMP"), "wb");
+        cb.on_caption = on_caption;
+    }
     tv_session *s = tv_session_create(cb);
+    tv_session_set_captions(s, cap_dump != NULL);
     int rc = tv_session_open(s, argv[1], 1192, argv[2]);
     printf("open -> %d\n", rc);
     if (rc != 0)
@@ -143,8 +166,8 @@ int main(int argc, char **argv)
                 printf(" 0x%02X=%d", i, eit_by_tid[i]);
         printf("\n");
     }
-    printf("video frames %d (%.2f fps), audio buffers %d\n", nvideo,
-           nvideo / ((last_v - first_v) / 90000.0 + 1e-9), naudio);
+    printf("video frames %d (%.2f fps), audio buffers %d, caption PES %d\n", nvideo,
+           nvideo / ((last_v - first_v) / 90000.0 + 1e-9), naudio, ncaption);
     tv_session_destroy(s);
     return 0;
 }

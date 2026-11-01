@@ -30,6 +30,25 @@ public struct WatchedService: Equatable {
     }
 }
 
+/// One PES of the ARIB captions of the service being watched.
+public struct CaptionPacket {
+    /// 文字スーパー rather than 字幕.
+    public let isSuperimpose: Bool
+    /// When to show it, on the clock of `PluginHost.presentationTime`. 文字スーパー have no time.
+    public let presentationTime: TimeInterval?
+    /// The PES payload.
+    public let data: Data
+    /// Changes when playback starts over, on a channel change or a new clock.
+    public let generation: UInt32
+
+    public init(isSuperimpose: Bool, presentationTime: TimeInterval?, data: Data, generation: UInt32) {
+        self.isSuperimpose = isSuperimpose
+        self.presentationTime = presentationTime
+        self.data = data
+        self.generation = generation
+    }
+}
+
 /// Something in `PluginHost` changed.
 public enum PluginEvent {
     case serviceChanged
@@ -69,11 +88,17 @@ public protocol PluginHost: AnyObject {
     var isVideoVisible: Bool { get }
     /// Seconds by which the picture is held back beyond normal live viewing (翻訳字幕).
     var playbackDelay: TimeInterval { get }
+    /// Where the picture on screen is on the broadcast timeline. Nil until the clock runs after a tune.
+    var presentationTime: TimeInterval? { get }
     /// Settings of this plugin, kept apart from the app's.
     var defaults: UserDefaults { get }
 
-    /// Shows `view` over the picture and below subtitles and the HUD. It is kept the size of the
-    /// picture, does not receive mouse events, and appears in captures.
+    /// Starts (or with nil, stops) delivering the captions of the service being watched. They come
+    /// through any delay of the picture, in order of arrival.
+    func setCaptionHandler(_ handler: ((CaptionPacket) -> Void)?)
+    /// Shows `view` over the picture and below subtitles and the HUD, and over the views of plugins
+    /// listed before this one. It is kept the size of the picture, does not receive mouse events,
+    /// and appears in captures.
     func addOverlay(_ view: NSView)
     func removeOverlay(_ view: NSView)
     /// Briefly shows a message over the video.

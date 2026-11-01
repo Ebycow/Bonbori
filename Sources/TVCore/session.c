@@ -81,6 +81,7 @@ struct tv_session {
     tv_decoder *tapdec;  // second audio decoder for on_tap_audio
     tv_timeline *timeline;
     atomic_bool tap_on;
+    atomic_bool captions_on;
 
     // Output delay line: PES and PCR wait here before reaching the decoders / on_clock.
     atomic_int delay_ms;
@@ -102,7 +103,7 @@ struct tv_session {
 };
 
 // ----------------------------------------------------------------- output delay line
-enum { DL_PCR = 2 };  // besides PES_VIDEO / PES_AUDIO
+enum { DL_PCR = 4 };  // besides the PES_ kinds
 
 typedef struct dl_item {
     struct dl_item *next;
@@ -169,6 +170,14 @@ static void deliver(tv_session *s, int kind, int st, const uint8_t *data, size_t
             s->cb.on_clock(s->cb.ctx, pts + off, gen);
         return;
     }
+    if (kind == PES_CAPTION || kind == PES_SUPERIMPOSE) {
+        int64_t off;
+        int ppm;
+        tv_timeline_get(s->timeline, gen, &off, &ppm);
+        if (s->cb.on_caption)
+            s->cb.on_caption(s->cb.ctx, kind == PES_SUPERIMPOSE, data, len, pts == TV_NOPTS ? -1 : pts + off, gen);
+        return;
+    }
     tv_decoder_push(kind == PES_VIDEO ? s->vdec : s->adec, st, data, len, pts, dts, gen);
 }
 
@@ -213,6 +222,8 @@ static void *dl_thread(void *arg)
 static void on_pes(void *ctx, int kind, int st, const uint8_t *data, size_t len, int64_t pts, int64_t dts)
 {
     tv_session *s = ctx;
+    if ((kind == PES_CAPTION || kind == PES_SUPERIMPOSE) && !atomic_load(&s->captions_on))
+        return;
     uint32_t gen = atomic_load(&s->gen);
     if (kind == PES_AUDIO && atomic_load(&s->tap_on))
         tv_decoder_push(s->tapdec, st, data, len, pts, dts, gen);
@@ -842,6 +853,11 @@ void tv_session_set_deinterlace(tv_session *s, bool on)
 void tv_session_set_audio_tap(tv_session *s, bool on)
 {
     atomic_store(&s->tap_on, on);
+}
+
+void tv_session_set_captions(tv_session *s, bool on)
+{
+    atomic_store(&s->captions_on, on);
 }
 
 uint32_t tv_session_set_output_delay(tv_session *s, int ms)

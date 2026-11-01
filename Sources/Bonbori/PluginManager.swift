@@ -9,6 +9,7 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
     private(set) var isVideoVisible = true
     private(set) var playbackDelay: TimeInterval = 0
 
+    private let player: Player
     private let videoView: VideoView
     private var slots: [Slot] = []
 
@@ -17,13 +18,16 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
         unowned let manager: PluginManager
         let info: PluginInfo
         let defaults: UserDefaults
+        let overlays: NSView
         var plugin: BonboriPlugin!
         var isActive = false
+        var captionHandler: ((CaptionPacket) -> Void)?
 
         init(_ type: BonboriPlugin.Type, manager: PluginManager) {
             self.manager = manager
             info = type.info
             defaults = UserDefaults(suiteName: "net.ebycow.bonbori.plugin.\(type.info.id)") ?? .standard
+            overlays = manager.videoView.makePluginOverlayHost()
             plugin = type.init(host: self)
         }
 
@@ -36,8 +40,19 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
         var service: WatchedService? { manager.service }
         var isVideoVisible: Bool { manager.isVideoVisible }
         var playbackDelay: TimeInterval { manager.playbackDelay }
+        var presentationTime: TimeInterval? { manager.player.isClockRunning ? manager.player.presentationTime : nil }
 
-        func addOverlay(_ view: NSView) { manager.videoView.addPluginOverlay(view) }
+        func setCaptionHandler(_ handler: ((CaptionPacket) -> Void)?) {
+            captionHandler = handler
+            manager.updateCaptionTap()
+        }
+
+        func addOverlay(_ view: NSView) {
+            view.frame = overlays.bounds
+            view.autoresizingMask = [.width, .height]
+            overlays.addSubview(view)
+        }
+
         func removeOverlay(_ view: NSView) { view.removeFromSuperview() }
         func showMessage(_ title: String, detail: String?) { manager.videoView.showHUD(title, detail, duration: 3) }
         func log(_ message: String) {
@@ -45,10 +60,20 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
         }
     }
 
-    init(videoView: VideoView, plugins: [BonboriPlugin.Type]) {
+    init(player: Player, videoView: VideoView, plugins: [BonboriPlugin.Type]) {
+        self.player = player
         self.videoView = videoView
         super.init()
         slots = plugins.map { Slot($0, manager: self) }
+    }
+
+    private func updateCaptionTap() {
+        let handlers = slots.compactMap(\.captionHandler)
+        player.setCaptions(handlers.isEmpty ? nil : { [weak self] packet in
+            DispatchQueue.main.async {
+                self?.slots.forEach { $0.captionHandler?(packet) }
+            }
+        })
     }
 
     func start() {
