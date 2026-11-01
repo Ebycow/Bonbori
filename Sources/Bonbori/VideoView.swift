@@ -60,8 +60,9 @@ final class VideoView: NSView {
         displayLayer.frame = picture
         CATransaction.commit()
         pluginOverlays.frame = area
+        // pluginOverlays is not flipped: its y grows upward from the bottom of the area
+        let inArea = CGRect(x: picture.minX - area.minX, y: area.maxY - picture.maxY, width: picture.width, height: picture.height)
         for host in pluginOverlays.subviews {
-            let inArea = picture.offsetBy(dx: -area.minX, dy: -area.minY)
             host.frame = host === pictureRegion?.owner ? pluginOverlays.bounds : inArea
         }
         subtitles.place(in: picture)
