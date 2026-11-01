@@ -61,12 +61,12 @@ struct CaptionAppearance {
 
 /// What goes behind the text.
 enum CaptionBackdrop: Int, CaseIterable {
-    case broadcast, gray, none
+    case broadcast, translucentBlack, none
 
     var title: String {
         switch self {
         case .broadcast: return "放送のとおり"
-        case .gray: return "薄いグレー"
+        case .translucentBlack: return "薄い黒"
         case .none: return "なし"
         }
     }
@@ -165,19 +165,28 @@ private struct Painter {
 
     private var background: CGColor? {
         switch options.backdrop {
-        case .gray: return CGColor(gray: 0.3, alpha: 0.6)
+        // what the broadcasts themselves mostly use
+        case .translucentBlack: return cgColor(Painter.translucentBlack)
         case .none: return nil
         case .broadcast: break
         }
-        if let color = options.appearance.background { return color }
+        if let color = systemBackground { return color }
         return style.background.isTransparent ? nil : cgColor(style.background)
+    }
+
+    private static let translucentBlack = CaptionColor(index: 65)
+
+    /// The style that macOS starts with asks for a transparent background. That is no choice to
+    /// take the broadcast's background away for: 文字の背景 is where to turn it off.
+    private var systemBackground: CGColor? {
+        options.appearance.background.flatMap { $0.alpha > 0 ? $0 : nil }
     }
 
     /// The outline of the text: its ORN color, or the color of the background, or black.
     private var edgeColor: CGColor {
         if let outline = style.outline { return cgColor(outline, opaque: true) }
         guard options.backdrop == .broadcast else { return .black }
-        return (options.appearance.background ?? cgColor(style.background, opaque: true)).copy(alpha: 1) ?? .black
+        return (systemBackground ?? cgColor(style.background, opaque: true)).copy(alpha: 1) ?? .black
     }
 
     private var edgeWidth: CGFloat {
@@ -202,10 +211,12 @@ private struct Painter {
 
     func paintBackground(_ rect: CGRect) {
         guard let background else { return }
-        // Not smoothed, or the edges between neighboring runs would show.
+        // On whole pixels, or the edges between neighboring runs would show.
+        let device = ctx.convertToDeviceSpace(rect)
+        let left = device.minX.rounded(), right = device.maxX.rounded(), top = device.minY.rounded(), bottom = device.maxY.rounded()
         ctx.setShouldAntialias(false)
         ctx.setFillColor(background)
-        ctx.fill(rect)
+        ctx.fill(ctx.convertToUserSpace(CGRect(x: left, y: top, width: right - left, height: bottom - top)))
         ctx.setShouldAntialias(true)
     }
 

@@ -338,9 +338,44 @@ private func backdropAlpha(_ row: CaptionRow, _ backdrop: CaptionBackdrop) -> UI
     let plain = rows(decoded([0xA2]))[0]               // the broadcast asks for no background
     let backed = rows(decoded([0x90, 0x50, 0xA2]))[0]  // black
     #expect(backdropAlpha(plain, .broadcast) == 0)
-    #expect(backdropAlpha(plain, .gray) > 100)
+    #expect(backdropAlpha(plain, .translucentBlack) == 128)
     #expect(backdropAlpha(backed, .broadcast) == 255)
     #expect(backdropAlpha(backed, .none) == 0)
+}
+
+/// Alpha along a line just below the top of the row, from its left end to its right end.
+private func alphaAlongTop(_ row: CaptionRow, options: CaptionRenderOptions, scale: CGFloat) -> Set<UInt8> {
+    let part = CaptionRenderer.render(row, options: options, scaleX: scale, scaleY: scale)[0]
+    let image = part.image
+    var out = [UInt8](repeating: 0, count: image.width * image.height * 4)
+    let ctx = CGContext(data: &out, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+    // the bitmap's first line is at the top; the text stays well below the top of its section
+    let margin = CGFloat(row.x) - part.rect.minX
+    let line = Int((margin + 3) * scale)
+    let from = Int((margin + 1) * scale), to = Int((margin + CaptionRenderer.width(of: row) - 1) * scale)
+    return Set((from..<to).map { out[(line * image.width + $0) * 4 + 3] })
+}
+
+@Test func noSeamsBetweenRuns() {
+    // full width, half width space, full width: three runs side by side
+    let row = rows(decoded([0x90, 0x50, 0xA2, 0x89, 0x20, 0x8A, 0xA4, 0x89, 0x20, 0x8A, 0xA6]))[0]
+    #expect(row.runs.count == 5)
+    var options = CaptionRenderOptions()
+    options.backdrop = .translucentBlack
+    for scale in [1.0, 1.37, 1.93, 2.0, 2.71, 3.33] {
+        #expect(alphaAlongTop(row, options: options, scale: scale).count == 1, "scale \(scale)")
+    }
+}
+
+@Test func systemStyleWithTransparentBackgroundKeepsTheBroadcasts() {
+    let row = rows(decoded([0x90, 0x50, 0xA2]))[0]
+    var options = CaptionRenderOptions()
+    options.appearance.background = CGColor(gray: 0, alpha: 0)
+    #expect(alphaAlongTop(row, options: options, scale: 2) == [255])
+    options.appearance.background = CGColor(gray: 1, alpha: 0.5)  // a style the viewer has chosen
+    #expect(alphaAlongTop(row, options: options, scale: 2) != [255])
 }
 
 @Test func builtInSoundFiles() {
