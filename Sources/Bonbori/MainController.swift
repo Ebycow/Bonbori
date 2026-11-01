@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import AppKit
 import AVFoundation
+import BonboriPluginKit
 import TVCore
 
 final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     let player = Player()
     let window: NSWindow
     let videoView: VideoView
+    private(set) lazy var plugins = PluginManager(videoView: videoView, plugins: installedPlugins)
     private let store = ChannelStore.shared
     private lazy var listPanel = ChannelListPanel(controller: self)
     private var guideWindow: ProgramGuideWindowController?
@@ -72,6 +74,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         window.makeKeyAndOrderFront(nil)
         buildMenus()
         applySubtitleSettings()
+        plugins.start()
         if Settings.shared.host.isEmpty {
             DispatchQueue.main.async { [weak self] in self?.showSettings(nil) }
             return
@@ -135,6 +138,15 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         listPanel.reload()
         guideWindow?.currentChannelChanged()
         updateSleepActivity()
+        updatePlugins()
+    }
+
+    /// Tells the plugins what is being watched. Channels passed through by a scan or
+    /// 番組表の取得 are not being watched.
+    private func updatePlugins() {
+        let watching = scanning || epgCapture.isRunning ? nil : current
+        plugins.update(service: watching.map { WatchedService(networkID: $0.onid, serviceID: $0.sid, name: $0.name) })
+        plugins.update(playbackDelay: player.outputDelay)
     }
 
     /// While watching, keeps the display awake if 「視聴中はスリープしない」 is on. While recording or
@@ -325,7 +337,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         case "r": toggleRecording(nil)
         case "p": capture(nil)
         case "s": toggleSubtitles(nil)
-        default: return false
+        default: return c.first.map(plugins.handleKey) ?? false
         }
         return true
     }
@@ -374,7 +386,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         player.snapshot(aspect: videoView.displayAspect) { [weak self] img in
             guard let self, let img else { return }
             let url = self.outputDir(.picturesDirectory).appendingPathComponent(self.fileStem() + ".png")
-            let rep = NSBitmapImageRep(cgImage: img)
+            let rep = NSBitmapImageRep(cgImage: self.videoView.compositingPluginOverlays(on: img))
             if let data = rep.representation(using: .png, properties: [:]), (try? data.write(to: url)) != nil {
                 self.videoView.showHUD("キャプチャ保存", url.lastPathComponent, duration: 2)
             }
@@ -428,6 +440,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             videoView.showHUD("番組表を取得するチャンネルがありません", nil, duration: 3)
         }
         updateSleepActivity()
+        updatePlugins()
     }
 
     /// Stops 番組表の取得 and returns to the channel that was being watched.
@@ -445,6 +458,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         videoView.showHUD(completed ? "番組表の取得が完了しました" : "番組表の取得を中止しました", nil, duration: 3)
         guideWindow?.captureStateChanged()
         updateSleepActivity()
+        updatePlugins()
     }
 
     private func epgCaptureProgressed() {
@@ -492,6 +506,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             subtitles.stop()
             player.setOutputDelay(0)
         }
+        updatePlugins()
     }
 
     /// 自動: the 副音声 (right) of a dual-mono program, which is where the original-language
@@ -581,6 +596,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
 
     private func runScan() {
         scanning = true
+        updatePlugins()
         let groups = Settings.shared.groups
         player.scan(groups: groups, progress: { [weak self] p in
             self?.videoView.setCenterMessage(String(format: "スキャン中 %d%%  %@\n検出: %d サービス", Int(p.fraction * 100), p.message, p.found))
@@ -600,6 +616,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             if let ch = self.current.flatMap({ self.store.find(id: $0.id) }) ?? self.store.tvChannels.first {
                 self.tune(ch)
             }
+            self.updatePlugins()
         })
     }
 
@@ -697,6 +714,12 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         subItem.submenu = makeSubtitleMenu()
         main.addItem(subItem)
 
+        if let pluginMenu = plugins.makeMenu() {
+            let pluginItem = NSMenuItem()
+            pluginItem.submenu = pluginMenu
+            main.addItem(pluginItem)
+        }
+
         let winItem = NSMenuItem()
         let win = NSMenu(title: "ウインドウ")
         win.addItem(withTitle: "しまう", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
@@ -737,6 +760,11 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         let subItem = NSMenuItem(title: "字幕", action: nil, keyEquivalent: "")
         subItem.submenu = makeSubtitleMenu()
         menu.addItem(subItem)
+        if let pluginMenu = plugins.makeMenu() {
+            let pluginItem = NSMenuItem(title: "プラグイン", action: nil, keyEquivalent: "")
+            pluginItem.submenu = pluginMenu
+            menu.addItem(pluginItem)
+        }
         let viewItem = NSMenuItem(title: "表示", action: nil, keyEquivalent: "")
         let view = NSMenu(title: "表示")
         addDisplayOptionItems(to: view)
@@ -914,6 +942,10 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             break
         }
         return true
+    }
+
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        plugins.update(isVideoVisible: window.occlusionState.contains(.visible))
     }
 
     func windowWillClose(_ notification: Notification) {
