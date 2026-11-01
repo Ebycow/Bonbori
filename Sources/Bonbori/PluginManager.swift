@@ -41,6 +41,7 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
         var isVideoVisible: Bool { manager.isVideoVisible }
         var playbackDelay: TimeInterval { manager.playbackDelay }
         var presentationTime: TimeInterval? { manager.player.isClockRunning ? manager.player.presentationTime : nil }
+        var volume: Float { manager.player.isMuted ? 0 : manager.player.volume }
 
         func setCaptionHandler(_ handler: ((CaptionPacket) -> Void)?) {
             captionHandler = handler

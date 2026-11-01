@@ -14,6 +14,8 @@ open Bonbori.app
 
 初回起動時に「ローカルネットワークへのアクセス」の許可を求められるので、許可してください。
 
+放送字幕の内蔵音には [TVCaptionMod2](https://github.com/xtne6f/TVCaptionMod2) の音声を使います。規約があるのでこのリポジトリには含めず、`build-app.sh` が隣の `../TVCaptionMod2`（環境変数 `TVCAPTIONMOD2` で変更可）からアプリに取り込みます。見つからないときはシステムサウンドで鳴らします。
+
 ## 初期設定
 
 1. 初回起動時に設定画面が開くので、BonDriverProxyEx サーバーのアドレス、ポート（初期値 `1192`）、グループ（初期値 `BonDriver-T,BonDriver-S`）を入力します。あとから `⌘,` で変更できます。
@@ -62,8 +64,8 @@ open Bonbori.app
 - 表示: 放送が指定する位置、色、背景、文字サイズ（半角・倍角など）、縁取り、下線、囲み、点滅に対応します。文字はこの Mac のフォントで画面の解像度に合わせて描きます
 - 放送独自の文字（DRCS）と PNG の字幕も表示します。ドットの粗い DRCS は、対応表にあるものなら普通の文字に置き換えます
 - 字幕は放送の時刻（PTS）に合わせて出します。「映像を遅らせて字幕に合わせる」を使っているときも映像に合います
-- メニュー「プラグイン」で、書体（丸ゴシック / 角ゴシック / 明朝）、表示のタイミング、文字スーパーの表示、振り仮名を隠す、中央に小さく表示、内蔵音（緊急地震速報のチャイムなど）を切り替えられます。内蔵音は macOS のシステムサウンドで鳴らします。第 2 言語のある番組では言語も選べます
-- システム設定 › アクセシビリティ › 字幕 のスタイルで放送より優先すると指定した項目（文字と背景の色、書体、文字の縁）は、そちらに従います。「視差効果を減らす」がオンのときは点滅させません
+- メニュー「プラグイン」で、書体（丸ゴシック / 角ゴシック / 明朝）、文字の背景（放送のとおり / 薄いグレー / なし）、表示のタイミング、文字スーパーの表示、振り仮名を隠す、中央に小さく表示、内蔵音（緊急地震速報のチャイムなど）を切り替えられます。内蔵音はアプリの音量に合わせて鳴り、ミュート中は鳴りません。第 2 言語のある番組では言語も選べます
+- システム設定 › アクセシビリティ › 字幕 のスタイルで放送より優先すると指定した項目（文字と背景の色、書体、文字の縁）は、そちらに従います。ただし文字の背景は、メニューで「放送のとおり」以外を選ぶとメニューが優先です。「視差効果を減らす」がオンのときは点滅させません
 - `P` のキャプチャには字幕も写ります
 - ワンセグ字幕、UCS 符号の字幕、ブラジル方式の字幕には対応していません。縦書きの字幕は横書きとして表示します
 
@@ -215,7 +217,7 @@ log show --last 1d --predicate 'subsystem == "net.ebycow.bonbori"'
 - [NicoJK](https://github.com/rutice/NicoJK)（rutice）と、そのフォークの [xtne6f/NicoJK](https://github.com/xtne6f/NicoJK)（xtne6f）: ニコニコ実況の表示の動作（行数と表示時間、コメントの配置、色の指定）を参考にしています。放送サービスと実況チャンネルの対応表は同梱の `jkch.sh.txt` から生成しています。
 - [jkcnsl](https://github.com/xtne6f/jkcnsl)（xtne6f, MIT License）: NX-Jikkyo との通信手順を参考にしています。
 - [NX-Jikkyo](https://github.com/tsukumijima/NX-Jikkyo)（tsukumijima, MIT License）: 実況コメントの受信に利用しています。
-- [TVCaptionMod2](https://github.com/xtne6f/TVCaptionMod2)（xtne6f）と、その元になった odaru 氏の「字幕 Plugin For TVTest」、mark10als 氏・maki 氏の Caption2Ass_PCR 付属の Caption.dll 改造版: 字幕と文字スーパーの解釈と表示の動作を参考にしています。ARIB の色、追加記号の Unicode 対応表、DRCS の置き換え表は同梱の `ColorDef.h`、`GaijiTable.h`、`TVCaptionMod2_Gaiji_std.txt` から生成しています。
+- [TVCaptionMod2](https://github.com/xtne6f/TVCaptionMod2)（xtne6f）と、その元になった odaru 氏の「字幕 Plugin For TVTest」、mark10als 氏・maki 氏の Caption2Ass_PCR 付属の Caption.dll 改造版: 字幕と文字スーパーの解釈と表示の動作を参考にしています。ARIB の色、追加記号の Unicode 対応表、DRCS の置き換え表は同梱の `ColorDef.h`、`GaijiTable.h`、`TVCaptionMod2_Gaiji_std.txt` から生成しています。内蔵音は同梱の `src/rom` をビルド時に取り込みます（速報チャイム1は xtne6f 氏の自作、ほかは[小森平氏のフリー効果音](https://taira-komori.jpn.org/)を加工・調整したもの。規約はアプリ内の `CaptionSounds/readme.txt` に引用されています）。
 - ARIB STD-B10 / STD-B24 / TR-B14 などの規格。
 
 ## 免責事項

@@ -59,8 +59,22 @@ struct CaptionAppearance {
     }
 }
 
+/// What goes behind the text.
+enum CaptionBackdrop: Int, CaseIterable {
+    case broadcast, gray, none
+
+    var title: String {
+        switch self {
+        case .broadcast: return "放送のとおり"
+        case .gray: return "薄いグレー"
+        case .none: return "なし"
+        }
+    }
+}
+
 struct CaptionRenderOptions {
     var typeface = CaptionTypeface.roundedGothic
+    var backdrop = CaptionBackdrop.broadcast
     /// 振り仮名 (small characters) are left out.
     var hidesRuby = false
     var appearance = CaptionAppearance()
@@ -150,6 +164,11 @@ private struct Painter {
     }
 
     private var background: CGColor? {
+        switch options.backdrop {
+        case .gray: return CGColor(gray: 0.3, alpha: 0.6)
+        case .none: return nil
+        case .broadcast: break
+        }
         if let color = options.appearance.background { return color }
         return style.background.isTransparent ? nil : cgColor(style.background)
     }
@@ -157,6 +176,7 @@ private struct Painter {
     /// The outline of the text: its ORN color, or the color of the background, or black.
     private var edgeColor: CGColor {
         if let outline = style.outline { return cgColor(outline, opaque: true) }
+        guard options.backdrop == .broadcast else { return .black }
         return (options.appearance.background ?? cgColor(style.background, opaque: true)).copy(alpha: 1) ?? .black
     }
 

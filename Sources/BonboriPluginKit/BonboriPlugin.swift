@@ -90,6 +90,8 @@ public protocol PluginHost: AnyObject {
     var playbackDelay: TimeInterval { get }
     /// Where the picture on screen is on the broadcast timeline. Nil until the clock runs after a tune.
     var presentationTime: TimeInterval? { get }
+    /// The volume the viewer has chosen, 0 to 1; 0 while muted.
+    var volume: Float { get }
     /// Settings of this plugin, kept apart from the app's.
     var defaults: UserDefaults { get }
 

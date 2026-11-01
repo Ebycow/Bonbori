@@ -149,7 +149,7 @@ public final class CaptionPlugin: NSObject, BonboriPlugin {
         guard playsSounds else { return }
         for case .row(let row) in batch.items {
             for run in row.runs {
-                if let sound = run.sound { CaptionSounds.play(sound) }
+                if let sound = run.sound { CaptionSounds.play(sound, volume: host.volume) }
             }
         }
     }
@@ -185,6 +185,10 @@ public final class CaptionPlugin: NSObject, BonboriPlugin {
         typeface.submenu = choices(CaptionTypeface.allCases.map { ($0.title, $0.rawValue) }, current: typefaceSetting.rawValue,
                                    action: #selector(setTypeface(_:)))
         items.append(typeface)
+        let backdrop = option("文字の背景", nil)
+        backdrop.submenu = choices(CaptionBackdrop.allCases.map { ($0.title, $0.rawValue) }, current: backdropSetting.rawValue,
+                                   action: #selector(setBackdrop(_:)))
+        items.append(backdrop)
         let timingItem = option("表示のタイミング", nil)
         timingItem.submenu = choices([("0.5 秒早める", -500), ("放送のとおり", 0), ("0.5 秒遅らせる", 500), ("1 秒遅らせる", 1000),
                                       ("受信したらすぐ", CaptionPlugin.asReceived)],
@@ -233,6 +237,11 @@ public final class CaptionPlugin: NSObject, BonboriPlugin {
         set { host.defaults.set(newValue.rawValue, forKey: "typeface") }
     }
 
+    private var backdropSetting: CaptionBackdrop {
+        get { CaptionBackdrop(rawValue: host.defaults.integer(forKey: "backdrop")) ?? .broadcast }
+        set { host.defaults.set(newValue.rawValue, forKey: "backdrop") }
+    }
+
     /// Milliseconds, or `asReceived`.
     private var timing: Int {
         get { host.defaults.integer(forKey: "timing") }
@@ -270,6 +279,11 @@ public final class CaptionPlugin: NSObject, BonboriPlugin {
         applySettings()
     }
 
+    @objc private func setBackdrop(_ sender: NSMenuItem) {
+        backdropSetting = CaptionBackdrop(rawValue: sender.tag) ?? .broadcast
+        applySettings()
+    }
+
     @objc private func setTiming(_ sender: NSMenuItem) {
         timing = sender.tag
     }
@@ -294,7 +308,7 @@ public final class CaptionPlugin: NSObject, BonboriPlugin {
 
     @objc private func toggleSounds() {
         playsSounds.toggle()
-        if playsSounds { CaptionSounds.play(0) }
+        if playsSounds { CaptionSounds.play(CaptionSounds.sample, volume: host.volume) }
     }
 
     private func applySettings() {
@@ -303,22 +317,53 @@ public final class CaptionPlugin: NSObject, BonboriPlugin {
         overlay.isCentered = isCentered
         var options = CaptionRenderOptions()
         options.typeface = typefaceSetting
+        options.backdrop = backdropSetting
         options.hidesRuby = hidesRuby
         options.appearance = .current
         overlay.options = options
     }
 }
 
-/// The receiver's built-in sounds (ARIB TR-B14), played with the sounds of the system.
+/// The receiver's built-in sounds (ARIB TR-B14). build-app.sh puts TVCaptionMod2's recordings into
+/// the app when it finds them; an app built without them makes do with the sounds of the system.
 enum CaptionSounds {
-    static func play(_ index: Int) {
-        let name: String
+    /// A short one, to show what turning the sounds on does.
+    static let sample = 5
+
+    private static var loaded: [Int: NSSound] = [:]
+
+    /// 速報チャイム 2 to 5 share one recording.
+    static func fileName(for index: Int) -> String? {
         switch index {
-        case 0...4: name = "Glass"   // 速報チャイム
-        case 5...12: name = "Tink"   // ボタン操作音
-        case 13: name = "Sosumi"     // アラート音
-        default: return
+        case 0: return "00"
+        case 1...4: return "01"
+        case 5...13: return String(format: "%02d", index)
+        default: return nil
         }
-        NSSound(named: name)?.play()
+    }
+
+    private static func systemSound(for index: Int) -> NSSound? {
+        switch index {
+        case 0...4: return NSSound(named: "Glass")   // 速報チャイム
+        case 5...12: return NSSound(named: "Tink")   // ボタン操作音
+        case 13: return NSSound(named: "Sosumi")     // アラート音
+        default: return nil
+        }
+    }
+
+    private static func sound(for index: Int) -> NSSound? {
+        guard let name = fileName(for: index) else { return nil }
+        if let sound = loaded[index] { return sound }
+        let url = Bundle.main.url(forResource: name, withExtension: "wav", subdirectory: "CaptionSounds")
+        let sound = url.flatMap { NSSound(contentsOf: $0, byReference: true) } ?? systemSound(for: index)
+        loaded[index] = sound
+        return sound
+    }
+
+    static func play(_ index: Int, volume: Float) {
+        guard let sound = sound(for: index) else { return }
+        sound.stop()
+        sound.volume = volume
+        sound.play()
     }
 }

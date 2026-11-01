@@ -320,6 +320,36 @@ private func pixel(_ image: CGImage, _ x: Int) -> [UInt8] {
     #expect(parts[0].image.width == Int((parts[0].rect.width * 2).rounded(.up)))
 }
 
+/// Alpha of the top left corner of the row's first cell.
+private func backdropAlpha(_ row: CaptionRow, _ backdrop: CaptionBackdrop) -> UInt8 {
+    var options = CaptionRenderOptions()
+    options.backdrop = backdrop
+    let part = CaptionRenderer.render(row, options: options, scaleX: 1, scaleY: 1)[0]
+    var out = [UInt8](repeating: 0, count: 4)
+    let ctx = CGContext(data: &out, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    // the row starts inside the margin
+    let margin = Int(CGFloat(row.x) - part.rect.minX)
+    ctx.draw(part.image, in: CGRect(x: -margin - 1, y: -(part.image.height - margin - 2), width: part.image.width, height: part.image.height))
+    return out[3]
+}
+
+@Test func backdropChoices() {
+    let plain = rows(decoded([0xA2]))[0]               // the broadcast asks for no background
+    let backed = rows(decoded([0x90, 0x50, 0xA2]))[0]  // black
+    #expect(backdropAlpha(plain, .broadcast) == 0)
+    #expect(backdropAlpha(plain, .gray) > 100)
+    #expect(backdropAlpha(backed, .broadcast) == 255)
+    #expect(backdropAlpha(backed, .none) == 0)
+}
+
+@Test func builtInSoundFiles() {
+    #expect(CaptionSounds.fileName(for: 0) == "00")
+    #expect(CaptionSounds.fileName(for: 4) == "01")  // the chimes after the first share one
+    #expect(CaptionSounds.fileName(for: 13) == "13")
+    #expect(CaptionSounds.fileName(for: 14) == nil)
+}
+
 @Test func flashingRunsGetTheirOwnLayer() {
     let row = rows(decoded([0xA2, 0x91, 0x40, 0xA4, 0x91, 0x47, 0xA6]))[0]
     let parts = CaptionRenderer.render(row, options: CaptionRenderOptions(), scaleX: 2, scaleY: 2)

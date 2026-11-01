@@ -13,6 +13,15 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Bonbori"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
+# 放送字幕の内蔵音: the recordings have terms of their own, so they stay out of this repository.
+ROM=${TVCAPTIONMOD2:-../TVCaptionMod2}/src/rom
+if [[ -f "$ROM/readme.txt" ]]; then
+    mkdir "$APP/Contents/Resources/CaptionSounds"
+    cp "$ROM"/*.wav "$ROM/readme.txt" "$APP/Contents/Resources/CaptionSounds/"
+else
+    echo "$ROM not found: 放送字幕の内蔵音はシステムサウンドになります"
+fi
+
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
