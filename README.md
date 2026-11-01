@@ -38,6 +38,7 @@ open Bonbori.app
 | R | 録画の開始 / 停止（TS をそのまま `~/Movies/Bonbori/` に保存） |
 | P | キャプチャ（PNG を `~/Pictures/Bonbori/` に保存） |
 | S | 翻訳字幕（英語の音声を日本語に訳して表示）のオン / オフ |
+| J | ニコニコ実況のオン / オフ |
 | F / Return / ダブルクリック | フルスクリーン |
 | 右クリック / Control+クリック | メニュー（選局・録画・キャプチャ・音声・表示・設定） |
 
@@ -52,6 +53,24 @@ open Bonbori.app
 - 英語の原文を訳文の下に表示するかどうかも選べます。
 - 初回は音声認識モデルを自動でダウンロードします。英語→日本語の翻訳モデルが無いときは英語だけを表示します（システム設定 › 一般 › 言語と地域 › 翻訳言語 から追加できます）。
 - 実測（M1、MLB 中継の英語実況）: 文字起こしと翻訳を合わせて CPU 1 コアの 1 割未満。訳文は話し終わってから中央値 4 秒、9 割が 6 秒以内に出ます。
+
+## ニコニコ実況
+
+`J`（またはメニュー「プラグイン」）で、見ているチャンネルの実況コメントを映像の上に流します（初期状態はオフ）。[NicoJK](https://github.com/xtne6f/NicoJK) の機能を参考に、プラグインとして作り直したものです。
+
+- コメントは [NX-Jikkyo](https://nx-jikkyo.tsukumijima.net/) から受信します。公式のニコニコ実況のコメントも転送されているので、この 1 か所の接続で両方が流れます。地デジ・BS・CS の 33 チャンネルに対応しています。チャンネルは放送のサービス ID から自動で判定します
+- 表示: 流れるコメント、上・下の固定コメント、色、大きさの指定に対応します。文字の大きさと不透明度はメニュー「プラグイン」で変えられます
+- 「映像を遅らせて字幕に合わせる」を使っているときは、コメントも同じ秒数だけ遅らせます
+- `P` のキャプチャにはコメントも写ります
+- コメントの投稿、過去ログ、録画への同期再生には対応していません
+
+非公式の API を使っているため、サーバーの仕様変更で動かなくなることがあります。有志が運営するサーバーなので、接続は次のように控えめにしています:
+
+- オフの間、チャンネルに対応する実況がない間、チャンネルスキャンと番組表の取得の間は接続しません
+- 同じチャンネルに 3 秒とどまってから接続します。ザッピング中は接続しません
+- ウインドウが隠れて 30 秒たつと切断し、見えるようになったら接続し直します
+- 接続の試行は 5 秒に 1 回までです。失敗が続くと間隔を倍にしていき、最長 5 分あけます
+- 投稿の権限と過去のコメントは要求しません。チャンネル一覧などの定期的な取得もしません
 
 ## 番組表
 
@@ -89,6 +108,15 @@ Sources/Bonbori (Swift/AppKit)
   ProgramDetailView.swift   インスペクタの番組詳細（SwiftUI）
   ProgramSearchView.swift   番組表の検索結果の一覧（SwiftUI）
   Subtitles.swift           翻訳字幕（音声認識・翻訳、PTS に合わせた表示）
+  PluginManager.swift       プラグインの管理。本体とプラグインの接点はここだけ
+  InstalledPlugins.swift    組み込むプラグインの一覧
+Sources/BonboriPluginKit    プラグインから見える API（BonboriPlugin / PluginHost）
+Sources/Plugins/Jikkyo      ニコニコ実況
+  JikkyoPlugin.swift        いつ接続するかの判断、メニュー
+  CommentClient.swift       NX-Jikkyo との通信（URLSession の WebSocket）
+  CommentOverlay.swift      弾幕の表示（Core Text で描いた画像を Core Animation で動かす）
+  Comment.swift             コメントの表示コマンドの解釈
+  ChannelTable.swift        放送サービスから実況番号への対応表（生成）
 Sources/tvprobe             コマンドラインの動作確認ツール
 ```
 
@@ -99,6 +127,21 @@ Sources/tvprobe             コマンドラインの動作確認ツール
 - BS: 0.4〜0.9 秒（チューナーの選局応答は約 190ms）
 - 地デジ: 0.9〜1.4 秒（PX4 の選局応答に約 650ms かかる）
 - ほかのクライアントが受信中のチャンネル（チューナー共有）: 約 0.2〜0.4 秒
+
+## プラグイン
+
+本体がなくても成り立つ機能は、TVTest のプラグインと同じ考え方で本体から切り離して作ります。プラグインは別の Swift モジュールで、`BonboriPluginKit` の API だけを通して本体とやり取りするので、本体の内部には触れられません（コンパイラが保証します）。
+
+本体がプラグインに提供するもの:
+
+- 視聴中のサービス、映像が見えているか、映像の遅延（変化は通知される）。チャンネルスキャンと番組表の取得で巡回している間は「視聴中のサービスなし」として扱う
+- 映像の上、字幕と HUD の下に重ねるビュー。キャプチャにも合成される
+- メニュー「プラグイン」（右クリックメニューにも出る）と、オン / オフのキー
+- プラグイン専用の設定の保存先、HUD のメッセージ、デバッグログ
+
+オン / オフの状態は本体が保存します。プラグインを追加するには、`Sources/Plugins` の下にターゲットを作り、`Package.swift` と `Sources/Bonbori/InstalledPlugins.swift` に書き加えます。削除はその逆です。プラグインが 1 つもなければ、メニュー「プラグイン」も出ません。
+
+プラグインは実行時に読み込まず、アプリに静的にリンクしています。実行時に読み込むには API を動的ライブラリとして本体と共有し、同じコンパイラでビルドしたものを揃える必要があり、1 つのリポジトリからビルドするアプリには手間に見合わないためです。
 
 ## サーバー側の注意
 
@@ -139,6 +182,9 @@ log show --last 1d --predicate 'subsystem == "net.ebycow.bonbori"'
 - [LibISDB](https://github.com/DBCTRADO/LibISDB)（DBCTRADO, GPL-2.0-or-later）: ARIB 追加記号の文字列表記、音声タイムスタンプの許容ずれなどを参考にしています。
 - [BonDriverProxyEx](https://github.com/HaijinW/BonDriverProxyEx)（MIT License）: 通信プロトコル（`inc/BdpPacket.h`）に従って実装しています。
 - [FFmpeg](https://ffmpeg.org/): 映像・音声のデコードとインタレース解除に使っています。
+- [NicoJK](https://github.com/rutice/NicoJK)（rutice）と、そのフォークの [xtne6f/NicoJK](https://github.com/xtne6f/NicoJK)（xtne6f）: ニコニコ実況の表示の動作（行数と表示時間、コメントの配置、色の指定）を参考にしています。放送サービスと実況チャンネルの対応表は同梱の `jkch.sh.txt` から生成しています。
+- [jkcnsl](https://github.com/xtne6f/jkcnsl)（xtne6f, MIT License）: NX-Jikkyo との通信手順を参考にしています。
+- [NX-Jikkyo](https://github.com/tsukumijima/NX-Jikkyo)（tsukumijima, MIT License）: 実況コメントの受信に利用しています。
 - ARIB STD-B10 / STD-B24 などの規格。
 
 ## 免責事項
