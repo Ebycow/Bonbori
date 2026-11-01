@@ -49,6 +49,9 @@ typedef struct {
     // output delay. `data` is the PES payload and is only valid during the call. `superimpose` tells
     // 文字スーパー from 字幕; it has no timestamp (pts < 0). Otherwise pts is on the on_clock timeline.
     void (*on_caption)(void *ctx, bool superimpose, const uint8_t *data, size_t len, int64_t pts90k, uint32_t gen);
+    // Whole 188-byte TS packets for a data broadcast browser (see tv_session_set_ts_tap), from behind
+    // the output delay, about one block per read from the server. `data` is only valid during the call.
+    void (*on_ts)(void *ctx, const uint8_t *data, size_t len, uint32_t gen);
 } tv_callbacks;
 
 tv_session *tv_session_create(tv_callbacks cb);
@@ -76,6 +79,9 @@ void tv_session_set_deinterlace(tv_session *s, bool on);
 void tv_session_set_audio_tap(tv_session *s, bool on);
 // Turns on_caption on and off.
 void tv_session_set_captions(tv_session *s, bool on);
+// Turns on_ts on and off. It carries the tables and the data carousels of the selected service,
+// not picture and sound: of those only the PCR is kept, in packets without a payload.
+void tv_session_set_ts_tap(tv_session *s, bool on);
 // Holds video, audio and the clock back by `ms` before decoding (0 = off), so that work done on
 // the audio tap can finish before the picture is shown. Drops what is queued and starts a new
 // generation, which is returned.

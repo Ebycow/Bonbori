@@ -76,6 +76,8 @@ public final class JikkyoPlugin: NSObject, BonboriPlugin {
             }
         case .playbackDelayChanged:
             overlay.clear()
+        case .volumeChanged, .audioChanged:
+            break
         }
     }
 

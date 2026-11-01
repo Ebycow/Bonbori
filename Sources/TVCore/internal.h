@@ -41,6 +41,8 @@ typedef struct {
     void (*on_event)(void *ctx, int type, const char *json);
     // Called when the selected service changes (stream reset needed).
     void (*on_service_switch)(void *ctx, int sid);
+    // One TS packet that passed the tap (see tv_demux_set_ts_tap).
+    void (*on_ts)(void *ctx, const uint8_t *packet);
 } tv_demux_cb;
 
 typedef struct tv_demux tv_demux;
@@ -51,6 +53,7 @@ void tv_demux_destroy(tv_demux *d);
 void tv_demux_reset(tv_demux *d, int sid);
 void tv_demux_select_service(tv_demux *d, int sid);
 void tv_demux_select_audio(tv_demux *d, int index);
+void tv_demux_set_ts_tap(tv_demux *d, bool on);
 void tv_demux_feed(tv_demux *d, const uint8_t *data, size_t len);
 
 typedef struct {

@@ -111,6 +111,8 @@ struct tv_demux {
     uint8_t *ring;
     int ring_head, ring_count;
 
+    atomic_bool ts_tap_on;
+
     tv_demux_stats stats;
 };
 
@@ -1100,6 +1102,59 @@ static void feed_pes(tv_demux *d, pes_asm *pa, int kind, bool pusi, const uint8_
 }
 
 // ----------------------------------------------------------------- packets
+// The tables a data broadcast reads, and what the selected service carries besides picture, sound
+// and captions: its carousels and event messages.
+static bool ts_tap_wants(const tv_demux *d, int pid)
+{
+    switch (pid) {
+    case 0x00:  // PAT
+    case 0x10:  // NIT
+    case 0x11:  // SDT, BAT
+    case 0x12:  // EIT
+    case 0x14:  // TOT
+    case 0x1F:  // SIT
+    case 0x24:  // BIT
+    case 0x26:
+    case 0x27:  // EIT (terrestrial schedule)
+        return true;
+    }
+    if (pid == d->pmt_pid)
+        return true;
+    for (int i = 0; i < d->nes; i++) {
+        const es_info *e = &d->es[i];
+        if (e->pid == pid)
+            return !is_video_type(e->stream_type) && !is_audio_type(e->stream_type) && pid != d->caption.pid &&
+                   pid != d->superimpose.pid;
+    }
+    return false;
+}
+
+static void ts_tap(tv_demux *d, const uint8_t *p, int pid, bool scrambled)
+{
+    if (ts_tap_wants(d, pid)) {
+        if (!scrambled)
+            d->cb.on_ts(d->cb.ctx, p);
+    } else if (pid == d->pcr_pid && ((p[3] >> 4) & 2) && p[4] >= 7 && p[4] <= 183 && (p[5] & 0x10)) {
+        // The PCR rides on the video, which is left out: send it on its own. adaptation_field_control
+        // is 2, so the continuity counter does not apply.
+        uint8_t pkt[TS_SIZE];
+        memset(pkt, 0xFF, sizeof(pkt));
+        pkt[0] = 0x47;
+        pkt[1] = (uint8_t)(pid >> 8);
+        pkt[2] = (uint8_t)pid;
+        pkt[3] = 2 << 4;
+        pkt[4] = TS_SIZE - 5;
+        pkt[5] = 0x10;
+        memcpy(pkt + 6, p + 6, 6);
+        d->cb.on_ts(d->cb.ctx, pkt);
+    }
+}
+
+void tv_demux_set_ts_tap(tv_demux *d, bool on)
+{
+    atomic_store(&d->ts_tap_on, on);
+}
+
 static void handle_packet(tv_demux *d, const uint8_t *p)
 {
     memcpy(d->ring + (size_t)d->ring_head * TS_SIZE, p, TS_SIZE);
@@ -1118,6 +1173,8 @@ static void handle_packet(tv_demux *d, const uint8_t *p)
     int cc = p[3] & 0x0F;
     if (pid == 0x1FFF)
         return;
+    if (atomic_load_explicit(&d->ts_tap_on, memory_order_relaxed))
+        ts_tap(d, p, pid, scr != 0);
 
     int off = 4;
     if (afc & 2) {

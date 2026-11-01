@@ -59,7 +59,7 @@ public final class CaptionPlugin: NSObject, BonboriPlugin {
             reset()
         case .playbackDelayChanged:
             forgetDisplayed()
-        case .visibilityChanged:
+        case .visibilityChanged, .volumeChanged, .audioChanged:
             break
         }
     }

@@ -29,6 +29,8 @@ final class Player {
     /// Called on a TVCore thread; see setCaptions.
     private var onCaption: ((CaptionPacket) -> Void)?
     private let captionLock = NSLock()
+    /// Called on a TVCore thread; see setTransportStream.
+    private var onTransportStream: ((TransportStreamBlock) -> Void)?
     /// Seconds by which picture and sound are held back (see setOutputDelay).
     private(set) var outputDelay: Double = 0
     private let tapLock = NSLock()
@@ -108,6 +110,10 @@ final class Player {
             guard let ctx, let data else { return }
             Unmanaged<Player>.fromOpaque(ctx).takeUnretainedValue().caption(superimpose, Data(bytes: data, count: len), pts, gen)
         }
+        cb.on_ts = { ctx, data, len, gen in
+            guard let ctx, let data else { return }
+            Unmanaged<Player>.fromOpaque(ctx).takeUnretainedValue().transportStream(Data(bytes: data, count: len), gen)
+        }
         session = tv_session_create(cb)
         tv_session_set_deinterlace(session, Settings.shared.deinterlace)
         prewarmAudio()
@@ -167,6 +173,17 @@ final class Player {
         let packet = CaptionPacket(isSuperimpose: superimpose, presentationTime: pts < 0 ? nil : Double(pts) / 90000,
                                    data: data, generation: gen)
         captionLock.withLock { onCaption }?(packet)
+    }
+
+    /// Delivers the TS for a data broadcast to `handler`, on a TVCore thread. Nil stops it.
+    func setTransportStream(_ handler: ((TransportStreamBlock) -> Void)?) {
+        captionLock.withLock { onTransportStream = handler }
+        tv_session_set_ts_tap(session, handler != nil)
+    }
+
+    private func transportStream(_ data: Data, _ gen: UInt32) {
+        let block = TransportStreamBlock(data: data, generation: gen)
+        captionLock.withLock { onTransportStream }?(block)
     }
 
     /// Holds picture and sound back by `seconds` so that subtitles made from the audio tap can

@@ -8,7 +8,14 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     let player = Player()
     let window: NSWindow
     let videoView: VideoView
-    private(set) lazy var plugins = PluginManager(player: player, videoView: videoView, plugins: installedPlugins)
+    private(set) lazy var plugins: PluginManager = {
+        let m = PluginManager(player: player, videoView: videoView, plugins: installedPlugins)
+        m.audioSelection = { [unowned self] in AudioSelection(index: audioIndex, dualMono: dualMono) }
+        m.selectAudio = { [unowned self] in selectAudio($0) }
+        m.tuneService = { [unowned self] in tuneService(networkID: $0, transportStreamID: $1, serviceID: $2) }
+        m.tuneRemoteKey = { [unowned self] in tuneKey($0) }
+        return m
+    }()
     private let store = ChannelStore.shared
     private lazy var listPanel = ChannelListPanel(controller: self)
     private var guideWindow: ProgramGuideWindowController?
@@ -170,6 +177,13 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         tune(next)
     }
 
+    private func tuneService(networkID: Int, transportStreamID: Int, serviceID: Int) -> Bool {
+        guard let ch = store.channels.first(where: { $0.onid == networkID && $0.tsid == transportStreamID && $0.sid == serviceID })
+        else { return false }
+        tune(ch)
+        return true
+    }
+
     private func tuneKey(_ key: Int) {
         let kind = current?.kind ?? .terrestrial
         if let ch = store.channels(of: kind).first(where: { $0.remoteKey == key }) { tune(ch) }
@@ -302,10 +316,12 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     private func changeVolume(_ delta: Float) {
         player.volume += delta
         videoView.showHUD("音量 \(Int((player.volume * 100).rounded()))%", nil, duration: 1.5)
+        plugins.volumeChanged()
     }
 
     private func handleKey(_ e: NSEvent) -> Bool {
         if e.modifierFlags.intersection([.command, .control, .option]).isEmpty == false { return false }
+        if plugins.offerKey(e) { return true }
         switch e.keyCode {
         case 126: zap(-1); return true    // up
         case 125: zap(1); return true     // down
@@ -385,10 +401,12 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     @objc func capture(_ sender: Any?) {
         player.snapshot(aspect: videoView.displayAspect) { [weak self] img in
             guard let self, let img else { return }
-            let url = self.outputDir(.picturesDirectory).appendingPathComponent(self.fileStem() + ".png")
-            let rep = NSBitmapImageRep(cgImage: self.videoView.compositingPluginOverlays(on: img))
-            if let data = rep.representation(using: .png, properties: [:]), (try? data.write(to: url)) != nil {
-                self.videoView.showHUD("キャプチャ保存", url.lastPathComponent, duration: 2)
+            self.plugins.overlaySnapshots { snapshots in
+                let url = self.outputDir(.picturesDirectory).appendingPathComponent(self.fileStem() + ".png")
+                let rep = NSBitmapImageRep(cgImage: self.videoView.compositingPluginOverlays(on: img, snapshots: snapshots))
+                if let data = rep.representation(using: .png, properties: [:]), (try? data.write(to: url)) != nil {
+                    self.videoView.showHUD("キャプチャ保存", url.lastPathComponent, duration: 2)
+                }
             }
         }
     }
@@ -396,6 +414,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     @objc func toggleMute(_ sender: Any?) {
         player.isMuted.toggle()
         videoView.showHUD(player.isMuted ? "ミュート" : "ミュート解除", nil, duration: 1.5)
+        plugins.volumeChanged()
     }
 
     @objc func toggleInfo(_ sender: Any?) {
@@ -473,6 +492,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         player.setAudio(index: -1, dualMono: dualMono)
         videoView.showHUD(["音声: 主+副 (ステレオ)", "音声: 主 (左)", "音声: 副 (右)"][dualMono], nil, duration: 1.5)
         updateInfo()
+        plugins.audioChanged()
     }
 
     @objc func cycleAudio(_ sender: Any?) {
@@ -480,6 +500,15 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         audioIndex = (audioIndex + 1) % n
         player.setAudio(index: audioIndex, dualMono: dualMono)
         videoView.showHUD("音声 \(audioIndex + 1)/\(n)", nil, duration: 1.5)
+        plugins.audioChanged()
+    }
+
+    /// A plugin changes the sound. It is not announced back to the plugins.
+    private func selectAudio(_ selection: AudioSelection) {
+        audioIndex = selection.index
+        dualMono = selection.dualMono
+        player.setAudio(index: audioIndex, dualMono: dualMono)
+        updateInfo()
     }
 
     @objc func toggleDeinterlace(_ sender: NSMenuItem) {

@@ -82,6 +82,9 @@ struct tv_session {
     tv_timeline *timeline;
     atomic_bool tap_on;
     atomic_bool captions_on;
+    // Packets of on_ts collected during one tv_demux_feed (network thread).
+    uint8_t *ts_block;
+    size_t ts_len, ts_cap;
 
     // Output delay line: PES and PCR wait here before reaching the decoders / on_clock.
     atomic_int delay_ms;
@@ -103,7 +106,7 @@ struct tv_session {
 };
 
 // ----------------------------------------------------------------- output delay line
-enum { DL_PCR = 4 };  // besides the PES_ kinds
+enum { DL_PCR = 4, DL_TS = 5 };  // besides the PES_ kinds
 
 typedef struct dl_item {
     struct dl_item *next;
@@ -168,6 +171,11 @@ static void deliver(tv_session *s, int kind, int st, const uint8_t *data, size_t
         tv_timeline_get(s->timeline, gen, &off, &ppm);
         if (s->cb.on_clock)
             s->cb.on_clock(s->cb.ctx, pts + off, gen);
+        return;
+    }
+    if (kind == DL_TS) {
+        if (s->cb.on_ts)
+            s->cb.on_ts(s->cb.ctx, data, len, gen);
         return;
     }
     if (kind == PES_CAPTION || kind == PES_SUPERIMPOSE) {
@@ -247,6 +255,30 @@ static void on_pcr(void *ctx, int64_t pcr)
         deliver(s, DL_PCR, 0, NULL, 0, pcr, TV_NOPTS, atomic_load(&s->gen));
 }
 
+static void on_dmx_ts(void *ctx, const uint8_t *packet)
+{
+    tv_session *s = ctx;
+    if (s->ts_len + 188 > s->ts_cap) {
+        s->ts_cap = s->ts_cap ? s->ts_cap * 2 : 188 * 1024;
+        s->ts_block = realloc(s->ts_block, s->ts_cap);
+    }
+    memcpy(s->ts_block + s->ts_len, packet, 188);
+    s->ts_len += 188;
+}
+
+static void flush_ts_block(tv_session *s)
+{
+    if (s->ts_len == 0)
+        return;
+    uint32_t gen = atomic_load(&s->gen);
+    int delay = atomic_load(&s->delay_ms);
+    if (delay > 0)
+        dl_push(s, delay, DL_TS, 0, s->ts_block, s->ts_len, TV_NOPTS, TV_NOPTS, gen);
+    else
+        deliver(s, DL_TS, 0, s->ts_block, s->ts_len, TV_NOPTS, TV_NOPTS, gen);
+    s->ts_len = 0;
+}
+
 static void on_dmx_event(void *ctx, int type, const char *json)
 {
     tv_session *s = ctx;
@@ -324,7 +356,7 @@ tv_session *tv_session_create(tv_callbacks cb)
     pthread_mutex_init(&s->mtx, NULL);
     pthread_mutex_init(&s->rec_mtx, NULL);
     pthread_cond_init(&s->cond, NULL);
-    tv_demux_cb dcb = {s, on_pes, on_pcr, on_dmx_event, on_service_switch};
+    tv_demux_cb dcb = {s, on_pes, on_pcr, on_dmx_event, on_service_switch, on_dmx_ts};
     s->dmx = tv_demux_create(dcb);
     tv_decoder_cb vcb = {s, on_dec_video, on_dec_audio, on_dec_info};
     s->vdec = tv_decoder_create(PES_VIDEO, vcb);
@@ -362,6 +394,7 @@ void tv_session_destroy(tv_session *s)
     tv_timeline_destroy(s->timeline);
     tv_demux_destroy(s->dmx);
     free(s->resp);
+    free(s->ts_block);
     pthread_mutex_destroy(&s->api_mtx);
     pthread_mutex_destroy(&s->mtx);
     pthread_cond_destroy(&s->cond);
@@ -582,6 +615,7 @@ static void *rx_thread(void *arg)
             if (!atomic_load(&s->discard_ts)) {
                 apply_requests(s);
                 tv_demux_feed(s->dmx, body + 8, size);
+                flush_ts_block(s);
                 s->bytes += size;
                 pthread_mutex_lock(&s->rec_mtx);
                 if (s->rec && fwrite(body + 8, 1, size, s->rec) == size)
@@ -858,6 +892,11 @@ void tv_session_set_audio_tap(tv_session *s, bool on)
 void tv_session_set_captions(tv_session *s, bool on)
 {
     atomic_store(&s->captions_on, on);
+}
+
+void tv_session_set_ts_tap(tv_session *s, bool on)
+{
+    tv_demux_set_ts_tap(s->dmx, on);
 }
 
 uint32_t tv_session_set_output_delay(tv_session *s, int ms)
