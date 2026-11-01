@@ -16,6 +16,7 @@ final class VideoView: NSView {
     let infoBar = OverlayLabel(fontSize: 12, weight: .regular, mono: true)
     let centerMessage = OverlayLabel(fontSize: 16, weight: .medium)
     let subtitles = SubtitleOverlay(frame: .zero)
+    private let pluginOverlays = PassthroughView()
     private var hudTimer: Timer?
 
     init(layer: AVSampleBufferDisplayLayer) {
@@ -31,6 +32,8 @@ final class VideoView: NSView {
         // composites the layer itself (e.g. during screen recording). A not-quite-opaque
         // layer is composited instead (seen on M1 + Pro Display XDR, macOS 27).
         displayLayer.opacity = 0.995
+        pluginOverlays.wantsLayer = true
+        addSubview(pluginOverlays)
         addSubview(subtitles)
         for v in [hud, subHud, infoBar, centerMessage] {
             addSubview(v)
@@ -52,6 +55,7 @@ final class VideoView: NSView {
         if h > b.height { h = b.height; w = h * displayAspect }
         displayLayer.frame = CGRect(x: (b.width - w) / 2, y: (b.height - h) / 2, width: w, height: h)
         CATransaction.commit()
+        pluginOverlays.frame = displayLayer.frame
         subtitles.place(in: displayLayer.frame)
 
         let pad: CGFloat = 16
@@ -65,6 +69,27 @@ final class VideoView: NSView {
         centerMessage.fit(maxWidth: maxW)
         centerMessage.frame.origin = CGPoint(x: (b.width - centerMessage.frame.width) / 2,
                                              y: (b.height - centerMessage.frame.height) / 2)
+    }
+
+    /// Puts a plugin's view over the picture, keeping it the size of the picture.
+    func addPluginOverlay(_ view: NSView) {
+        view.frame = pluginOverlays.bounds
+        view.autoresizingMask = [.width, .height]
+        pluginOverlays.addSubview(view)
+    }
+
+    /// `image` (a captured frame) with the plugin overlays as they are on screen now.
+    func compositingPluginOverlays(on image: CGImage) -> CGImage {
+        guard !pluginOverlays.subviews.isEmpty, let overlays = pluginOverlays.layer,
+              let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: image.colorSpace ?? CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return image }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        ctx.scaleBy(x: CGFloat(image.width) / overlays.bounds.width, y: CGFloat(image.height) / overlays.bounds.height)
+        // the presentation layer has the moving comments where they are right now
+        (overlays.presentation() ?? overlays).render(in: ctx)
+        return ctx.makeImage() ?? image
     }
 
     func showHUD(_ title: String, _ sub: String?, duration: TimeInterval = 4) {
@@ -108,6 +133,11 @@ final class VideoView: NSView {
     override func scrollWheel(with event: NSEvent) {
         onScroll?(event.scrollingDeltaY)
     }
+}
+
+/// Sits over the picture without taking mouse events away from the video view.
+private final class PassthroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// Rounded translucent label used for HUD / info overlays.

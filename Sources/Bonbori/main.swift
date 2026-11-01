@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        controller?.plugins.stop()
         controller?.player.stopRecording()
         controller?.player.stop()
         EPGStore.shared.flush()

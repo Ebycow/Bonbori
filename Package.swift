@@ -37,9 +37,14 @@ let package = Package(
             dependencies: ["TVCore"],
             path: "Sources/tvprobe"
         ),
+        // What plugins can see of the app.
+        .target(
+            name: "BonboriPluginKit",
+            path: "Sources/BonboriPluginKit"
+        ),
         .executableTarget(
             name: "Bonbori",
-            dependencies: ["TVCore"],
+            dependencies: ["TVCore", "BonboriPluginKit"],
             path: "Sources/Bonbori"
         ),
     ]
