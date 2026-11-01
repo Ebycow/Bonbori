@@ -52,14 +52,24 @@ let package = Package(
             dependencies: ["BonboriPluginKit"],
             path: "Sources/Plugins/Captions"
         ),
+        .target(
+            name: "DataBroadcasting",
+            dependencies: ["BonboriPluginKit"],
+            path: "Sources/Plugins/DataBroadcasting"
+        ),
         .testTarget(
             name: "CaptionsTests",
             dependencies: ["Captions"],
             path: "Tests/CaptionsTests"
         ),
+        .testTarget(
+            name: "DataBroadcastingTests",
+            dependencies: ["DataBroadcasting"],
+            path: "Tests/DataBroadcastingTests"
+        ),
         .executableTarget(
             name: "Bonbori",
-            dependencies: ["TVCore", "BonboriPluginKit", "Jikkyo", "Captions"],
+            dependencies: ["TVCore", "BonboriPluginKit", "Jikkyo", "Captions", "DataBroadcasting"],
             path: "Sources/Bonbori"
         ),
     ]

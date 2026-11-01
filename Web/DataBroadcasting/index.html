@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>データ放送ブラウザ</title>
+    <style>
+        html {
+            background: transparent;
+        }
+
+        body {
+            padding: 0px;
+            margin: 0px;
+            position: absolute;
+            overflow: hidden;
+            background: transparent;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        #data-broadcasting-browser {
+            flex-shrink: 0;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .remote-control-status-container {
+            position: absolute;
+            width: 140px;
+            height: 4em;
+            right: 20px;
+            bottom: 20px;
+            display: flex;
+            flex-direction: column-reverse;
+        }
+
+        .remote-control-status {
+            width: 140px;
+            height: 1.5em;
+            font-family: "丸ゴシック";
+            background-color: rgba(32, 32, 32, 0.5);
+            vertical-align: middle;
+            line-height: 1.5em;
+            text-align: center;
+            color: white;
+            margin: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <div style="display: flex; position: absolute; left: 0px; top: 0px;">
+        <div id="data-broadcasting-browser" style="width: 960px; height: 540px;">
+            <div class="data-broadcasting-browser-content"></div>
+            <div class="arib-video-invisible-container"
+                style="width: 960px; height: 540px; position: absolute; left: 0px; top: 0px;">
+                <div class="arib-video-container"
+                    style="width: 100% !important; height: 100% !important; display: block !important; visibility: visible !important;">
+                </div>
+            </div>
+            <div class="remote-control-status-container">
+                <div class="remote-control-status remote-control-receiving-status" style="display: none;">データ取得中...</div>
+                <div class="remote-control-status remote-control-networking-status" style="display: none;">通信中...</div>
+            </div>
+        </div>
+    </div>
+    <script src="./main.js"></script>
+</body>
+
+</html>

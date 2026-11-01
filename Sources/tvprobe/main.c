@@ -76,6 +76,16 @@ static void on_clock(void *ctx, int64_t pcr, uint32_t gen)
 static FILE *cap_dump;
 static atomic_int ncaption;
 
+// TSDUMP=path: saves what the data broadcast tap passes on.
+static FILE *ts_dump;
+
+static void on_ts(void *ctx, const uint8_t *data, size_t len, uint32_t gen)
+{
+    (void)ctx;
+    (void)gen;
+    fwrite(data, 1, len, ts_dump);
+}
+
 static void on_caption(void *ctx, bool superimpose, const uint8_t *data, size_t len, int64_t pts, uint32_t gen)
 {
     (void)ctx;
@@ -130,8 +140,13 @@ int main(int argc, char **argv)
         cap_dump = fopen(getenv("CAPDUMP"), "wb");
         cb.on_caption = on_caption;
     }
+    if (getenv("TSDUMP")) {
+        ts_dump = fopen(getenv("TSDUMP"), "wb");
+        cb.on_ts = on_ts;
+    }
     tv_session *s = tv_session_create(cb);
     tv_session_set_captions(s, cap_dump != NULL);
+    tv_session_set_ts_tap(s, ts_dump != NULL);
     int rc = tv_session_open(s, argv[1], 1192, argv[2]);
     printf("open -> %d\n", rc);
     if (rc != 0)

@@ -17,6 +17,8 @@ final class VideoView: NSView {
     let centerMessage = OverlayLabel(fontSize: 16, weight: .medium)
     let subtitles = SubtitleOverlay(frame: .zero)
     private let pluginOverlays = PassthroughView()
+    /// Where the picture goes within its area, and the overlay host that keeps the whole area.
+    private var pictureRegion: (rect: CGRect, owner: NSView)?
     private var hudTimer: Timer?
 
     init(layer: AVSampleBufferDisplayLayer) {
@@ -53,10 +55,17 @@ final class VideoView: NSView {
         let b = bounds
         var w = b.width, h = b.width / displayAspect
         if h > b.height { h = b.height; w = h * displayAspect }
-        displayLayer.frame = CGRect(x: (b.width - w) / 2, y: (b.height - h) / 2, width: w, height: h)
+        let area = CGRect(x: (b.width - w) / 2, y: (b.height - h) / 2, width: w, height: h)
+        let picture = pictureRegion.map { VideoView.rect($0.rect, in: area) } ?? area
+        displayLayer.frame = picture
         CATransaction.commit()
-        pluginOverlays.frame = displayLayer.frame
-        subtitles.place(in: displayLayer.frame)
+        pluginOverlays.frame = area
+        // pluginOverlays is not flipped: its y grows upward from the bottom of the area
+        let inArea = CGRect(x: picture.minX - area.minX, y: area.maxY - picture.maxY, width: picture.width, height: picture.height)
+        for host in pluginOverlays.subviews {
+            host.frame = host === pictureRegion?.owner ? pluginOverlays.bounds : inArea
+        }
+        subtitles.place(in: picture)
 
         let pad: CGFloat = 16
         let maxW = b.width - pad * 2
@@ -79,14 +88,37 @@ final class VideoView: NSView {
         return host
     }
 
-    /// `image` (a captured frame) with the plugin overlays as they are on screen now.
-    func compositingPluginOverlays(on image: CGImage) -> CGImage {
-        guard pluginOverlays.subviews.contains(where: { !$0.subviews.isEmpty }), let overlays = pluginOverlays.layer,
+    private static func rect(_ unit: CGRect, in area: CGRect) -> CGRect {
+        CGRect(x: area.minX + unit.minX * area.width, y: area.minY + unit.minY * area.height,
+               width: unit.width * area.width, height: unit.height * area.height)
+    }
+
+    /// Shows the picture in `region` of its area (see PluginHost.setPictureRegion). `owner` is the
+    /// overlay host of the plugin that asked.
+    func setPictureRegion(_ region: CGRect?, ownedBy owner: NSView) {
+        pictureRegion = region.map { ($0, owner) }
+        needsLayout = true
+    }
+
+    /// `image` (a captured frame) as the picture is on screen now: in its region if it has one, with
+    /// `snapshots` from the plugins over it and the plugin overlays on top.
+    func compositingPluginOverlays(on image: CGImage, snapshots: [CGImage]) -> CGImage {
+        guard pictureRegion != nil || !snapshots.isEmpty || pluginOverlays.subviews.contains(where: { !$0.subviews.isEmpty }),
+              let overlays = pluginOverlays.layer,
               let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: image.colorSpace ?? CGColorSpaceCreateDeviceRGB(),
                                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
         else { return image }
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let canvas = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        var picture = canvas
+        if let unit = pictureRegion?.rect {
+            ctx.setFillColor(.black)
+            ctx.fill(canvas)
+            // this context has its origin at the bottom left
+            picture = VideoView.rect(CGRect(x: unit.minX, y: 1 - unit.maxY, width: unit.width, height: unit.height), in: canvas)
+        }
+        ctx.draw(image, in: picture)
+        for snapshot in snapshots { ctx.draw(snapshot, in: canvas) }
         ctx.scaleBy(x: CGFloat(image.width) / overlays.bounds.width, y: CGFloat(image.height) / overlays.bounds.height)
         // the presentation layer has the moving comments where they are right now
         (overlays.presentation() ?? overlays).render(in: ctx)

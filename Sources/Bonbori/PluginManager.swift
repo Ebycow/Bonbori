@@ -8,6 +8,11 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
     private(set) var service: WatchedService?
     private(set) var isVideoVisible = true
     private(set) var playbackDelay: TimeInterval = 0
+    /// What the app does for the plugins. Set before `start`.
+    var audioSelection: () -> AudioSelection = { AudioSelection(index: 0, dualMono: 0) }
+    var selectAudio: (AudioSelection) -> Void = { _ in }
+    var tuneService: (_ networkID: Int, _ transportStreamID: Int, _ serviceID: Int) -> Bool = { _, _, _ in false }
+    var tuneRemoteKey: (Int) -> Void = { _ in }
 
     private let player: Player
     private let videoView: VideoView
@@ -22,6 +27,7 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
         var plugin: BonboriPlugin!
         var isActive = false
         var captionHandler: ((CaptionPacket) -> Void)?
+        var transportStreamHandler: ((TransportStreamBlock) -> Void)?
 
         init(_ type: BonboriPlugin.Type, manager: PluginManager) {
             self.manager = manager
@@ -42,10 +48,16 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
         var playbackDelay: TimeInterval { manager.playbackDelay }
         var presentationTime: TimeInterval? { manager.player.isClockRunning ? manager.player.presentationTime : nil }
         var volume: Float { manager.player.isMuted ? 0 : manager.player.volume }
+        var audioSelection: AudioSelection { manager.audioSelection() }
 
         func setCaptionHandler(_ handler: ((CaptionPacket) -> Void)?) {
             captionHandler = handler
             manager.updateCaptionTap()
+        }
+
+        func setTransportStreamHandler(_ handler: ((TransportStreamBlock) -> Void)?) {
+            transportStreamHandler = handler
+            manager.updateTransportStreamTap()
         }
 
         func addOverlay(_ view: NSView) {
@@ -55,6 +67,12 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
         }
 
         func removeOverlay(_ view: NSView) { view.removeFromSuperview() }
+        func setPictureRegion(_ region: CGRect?) { manager.videoView.setPictureRegion(region, ownedBy: overlays) }
+        func tune(networkID: Int, transportStreamID: Int, serviceID: Int) -> Bool {
+            manager.tuneService(networkID, transportStreamID, serviceID)
+        }
+        func tune(remoteKey: Int) { manager.tuneRemoteKey(remoteKey) }
+        func selectAudio(_ selection: AudioSelection) { manager.selectAudio(selection) }
         func showMessage(_ title: String, detail: String?) { manager.videoView.showHUD(title, detail, duration: 3) }
         func log(_ message: String) {
             if envVar("DEBUG") != nil { debugLog(info.id, message) }
@@ -73,6 +91,15 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
         player.setCaptions(handlers.isEmpty ? nil : { [weak self] packet in
             DispatchQueue.main.async {
                 self?.slots.forEach { $0.captionHandler?(packet) }
+            }
+        })
+    }
+
+    private func updateTransportStreamTap() {
+        let handlers = slots.compactMap(\.transportStreamHandler)
+        player.setTransportStream(handlers.isEmpty ? nil : { [weak self] block in
+            DispatchQueue.main.async {
+                self?.slots.forEach { $0.transportStreamHandler?(block) }
             }
         })
     }
@@ -123,7 +150,32 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
         send(.playbackDelayChanged)
     }
 
+    func volumeChanged() { send(.volumeChanged) }
+    func audioChanged() { send(.audioChanged) }
+
+    // MARK: - Capture
+
+    /// The overlays that only their plugin can draw, in the order of the plugins.
+    func overlaySnapshots(completion: @escaping ([CGImage]) -> Void) {
+        let active = slots.filter(\.isActive)
+        var images = [CGImage?](repeating: nil, count: active.count)
+        let group = DispatchGroup()
+        for (i, s) in active.enumerated() {
+            group.enter()
+            s.plugin.snapshotOverlay { image in
+                images[i] = image
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) { completion(images.compactMap { $0 }) }
+    }
+
     // MARK: - Keys and menus
+
+    /// Offers a key to the active plugins before the app acts on it.
+    func offerKey(_ event: NSEvent) -> Bool {
+        slots.contains { $0.isActive && $0.plugin.handleKey(event) }
+    }
 
     func handleKey(_ c: Character) -> Bool {
         guard let s = slots.first(where: { $0.info.key == c }) else { return false }

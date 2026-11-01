@@ -2,3 +2,6 @@
 .swiftpm/
 *.app/
 .DS_Store
+node_modules/
+Web/DataBroadcasting/dist/
+Web/DataBroadcasting/build/
