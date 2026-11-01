@@ -42,9 +42,14 @@ let package = Package(
             name: "BonboriPluginKit",
             path: "Sources/BonboriPluginKit"
         ),
+        .target(
+            name: "Jikkyo",
+            dependencies: ["BonboriPluginKit"],
+            path: "Sources/Plugins/Jikkyo"
+        ),
         .executableTarget(
             name: "Bonbori",
-            dependencies: ["TVCore", "BonboriPluginKit"],
+            dependencies: ["TVCore", "BonboriPluginKit", "Jikkyo"],
             path: "Sources/Bonbori"
         ),
     ]
