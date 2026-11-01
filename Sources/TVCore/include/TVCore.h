@@ -45,6 +45,10 @@ typedef struct {
     // Audio tap (see tv_session_set_audio_tap), on its own decoder thread. Same format and
     // timeline as on_audio, but both channels as broadcast and never delayed.
     void (*on_tap_audio)(void *ctx, CMSampleBufferRef sb, uint32_t gen);
+    // One PES of the selected service's ARIB captions (see tv_session_set_captions), from behind the
+    // output delay. `data` is the PES payload and is only valid during the call. `superimpose` tells
+    // 文字スーパー from 字幕; it has no timestamp (pts < 0). Otherwise pts is on the on_clock timeline.
+    void (*on_caption)(void *ctx, bool superimpose, const uint8_t *data, size_t len, int64_t pts90k, uint32_t gen);
 } tv_callbacks;
 
 tv_session *tv_session_create(tv_callbacks cb);
@@ -70,6 +74,8 @@ void tv_session_set_audio(tv_session *s, int es_index, int dual_mono_mode);
 void tv_session_set_deinterlace(tv_session *s, bool on);
 // Decodes the selected audio ES a second time for on_tap_audio (used for speech recognition).
 void tv_session_set_audio_tap(tv_session *s, bool on);
+// Turns on_caption on and off.
+void tv_session_set_captions(tv_session *s, bool on);
 // Holds video, audio and the clock back by `ms` before decoding (0 = off), so that work done on
 // the audio tap can finish before the picture is shown. Drops what is queued and starts a new
 // generation, which is returned.

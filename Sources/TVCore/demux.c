@@ -14,6 +14,8 @@
 #define TS_SIZE 188
 #define RING_PACKETS 12288  // ~2.3MB: covers the PAT/PMT wait after a tune
 #define EIT_SEEN_SLOTS 65536  // EIT sections already passed on in this tune (BS carries ~30k)
+#define TAG_CAPTION 0x30      // component tag of the default 字幕 ES
+#define TAG_SUPERIMPOSE 0x38  // component tag of the default 文字スーパー ES
 
 typedef struct {
     uint8_t *buf;
@@ -76,7 +78,7 @@ struct tv_demux {
     int nes;
     es_info es[MAX_ES];
     int audio_index;
-    pes_asm video, audio;
+    pes_asm video, audio, caption, superimpose;
 
     // SDT / NIT
     int onid;
@@ -124,7 +126,7 @@ tv_demux *tv_demux_create(tv_demux_cb cb)
 {
     tv_demux *d = calloc(1, sizeof(*d));
     d->cb = cb;
-    d->video.pid = d->audio.pid = -1;
+    d->video.pid = d->audio.pid = d->caption.pid = d->superimpose.pid = -1;
     d->ring = malloc((size_t)RING_PACKETS * TS_SIZE);
     d->eit_keys = malloc(EIT_SEEN_SLOTS * sizeof(uint64_t));
     d->eit_vers = malloc(EIT_SEEN_SLOTS);
@@ -144,6 +146,8 @@ void tv_demux_destroy(tv_demux *d)
     }
     free(d->video.buf);
     free(d->audio.buf);
+    free(d->caption.buf);
+    free(d->superimpose.buf);
     free(d->ring);
     free(d->eit_keys);
     free(d->eit_vers);
@@ -156,9 +160,11 @@ static void clear_selection(tv_demux *d)
     d->pmt_version = -1;
     d->pcr_pid = -1;
     d->nes = 0;
-    d->video.pid = d->audio.pid = -1;
+    d->video.pid = d->audio.pid = d->caption.pid = d->superimpose.pid = -1;
     reset_pes(&d->video);
     reset_pes(&d->audio);
+    reset_pes(&d->caption);
+    reset_pes(&d->superimpose);
     d->eit_version[0] = d->eit_version[1] = -1;
     memset(d->events, 0, sizeof(d->events));
 }
@@ -444,9 +450,13 @@ static void replay_ring(tv_demux *d)
 
 static void apply_es_selection(tv_demux *d)
 {
-    int vpid = -1, vst = -1, apid = -1, ast = -1, ai = 0;
+    int vpid = -1, vst = -1, apid = -1, ast = -1, ai = 0, cpid = -1, spid = -1;
     for (int i = 0; i < d->nes; i++) {
         es_info *e = &d->es[i];
+        if (e->stream_type == 0x06 && e->component_tag == TAG_CAPTION)
+            cpid = e->pid;
+        else if (e->stream_type == 0x06 && e->component_tag == TAG_SUPERIMPOSE)
+            spid = e->pid;
         if (vpid < 0 && is_video_type(e->stream_type)) {
             vpid = e->pid;
             vst = e->stream_type;
@@ -458,6 +468,14 @@ static void apply_es_selection(tv_demux *d)
             }
             ai++;
         }
+    }
+    if (cpid != d->caption.pid) {
+        reset_pes(&d->caption);
+        d->caption.pid = cpid;
+    }
+    if (spid != d->superimpose.pid) {
+        reset_pes(&d->superimpose);
+        d->superimpose.pid = spid;
     }
     bool changed = false;
     if (vpid != d->video.pid || vst != d->video.stream_type) {
@@ -1018,10 +1036,19 @@ static void feed_section(tv_demux *d, int pid, bool pusi, const uint8_t *p, int 
 // ----------------------------------------------------------------- PES
 static void pes_emit(tv_demux *d, pes_asm *pa, int kind)
 {
-    if (!pa->active || pa->len < 9)
+    bool caption = kind == PES_CAPTION || kind == PES_SUPERIMPOSE;
+    if (!pa->active || pa->len < 6 || (caption && pa->corrupt))
         goto done;
     const uint8_t *b = pa->buf;
     if (b[0] != 0 || b[1] != 0 || b[2] != 1)
+        goto done;
+    if (b[3] == 0xBF) {  // private_stream_2 (文字スーパー): no timestamps, the data follows at once
+        size_t end = pa->expected > 0 && pa->len > pa->expected ? pa->expected : pa->len;
+        if (caption && end > 6 && d->cb.on_pes)
+            d->cb.on_pes(d->cb.ctx, kind, pa->stream_type, b + 6, end - 6, TV_NOPTS, TV_NOPTS);
+        goto done;
+    }
+    if (pa->len < 9)
         goto done;
     int flags = b[7];
     int hl = b[8];
@@ -1121,6 +1148,10 @@ static void handle_packet(tv_demux *d, const uint8_t *p)
                 d->video.corrupt = true;
             else if (pid == d->audio.pid)
                 d->audio.corrupt = true;
+            else if (pid == d->caption.pid)
+                d->caption.corrupt = true;
+            else if (pid == d->superimpose.pid)
+                d->superimpose.corrupt = true;
         }
     }
     d->cc[pid] = (int8_t)cc;
@@ -1131,6 +1162,10 @@ static void handle_packet(tv_demux *d, const uint8_t *p)
             reset_pes(&d->video);
         else if (pid == d->audio.pid)
             reset_pes(&d->audio);
+        else if (pid == d->caption.pid)
+            reset_pes(&d->caption);
+        else if (pid == d->superimpose.pid)
+            reset_pes(&d->superimpose);
         return;
     }
 
@@ -1140,6 +1175,10 @@ static void handle_packet(tv_demux *d, const uint8_t *p)
         feed_pes(d, &d->video, PES_VIDEO, pusi, pl, n);
     else if (pid == d->audio.pid)
         feed_pes(d, &d->audio, PES_AUDIO, pusi, pl, n);
+    else if (pid == d->caption.pid)
+        feed_pes(d, &d->caption, PES_CAPTION, pusi, pl, n);
+    else if (pid == d->superimpose.pid)
+        feed_pes(d, &d->superimpose, PES_SUPERIMPOSE, pusi, pl, n);
     else if (pid == 0x00 || pid == d->pmt_pid || pid == 0x10 || pid == 0x11 || pid == 0x12 || pid == 0x14)
         feed_section(d, pid, pusi, pl, n);
 }

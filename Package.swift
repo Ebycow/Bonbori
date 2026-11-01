@@ -47,9 +47,19 @@ let package = Package(
             dependencies: ["BonboriPluginKit"],
             path: "Sources/Plugins/Jikkyo"
         ),
+        .target(
+            name: "Captions",
+            dependencies: ["BonboriPluginKit"],
+            path: "Sources/Plugins/Captions"
+        ),
+        .testTarget(
+            name: "CaptionsTests",
+            dependencies: ["Captions"],
+            path: "Tests/CaptionsTests"
+        ),
         .executableTarget(
             name: "Bonbori",
-            dependencies: ["TVCore", "BonboriPluginKit", "Jikkyo"],
+            dependencies: ["TVCore", "BonboriPluginKit", "Jikkyo", "Captions"],
             path: "Sources/Bonbori"
         ),
     ]

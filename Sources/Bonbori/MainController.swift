@@ -8,7 +8,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     let player = Player()
     let window: NSWindow
     let videoView: VideoView
-    private(set) lazy var plugins = PluginManager(videoView: videoView, plugins: installedPlugins)
+    private(set) lazy var plugins = PluginManager(player: player, videoView: videoView, plugins: installedPlugins)
     private let store = ChannelStore.shared
     private lazy var listPanel = ChannelListPanel(controller: self)
     private var guideWindow: ProgramGuideWindowController?

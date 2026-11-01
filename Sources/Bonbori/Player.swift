@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import AVFoundation
+import BonboriPluginKit
 import CoreImage
 import CoreMedia
 import Foundation
@@ -25,6 +26,9 @@ final class Player {
     /// Undelayed decoded audio (both channels) while the audio tap is on; called on a decoder thread.
     /// Set before turning the tap on.
     var onTapAudio: ((CMSampleBuffer, UInt32) -> Void)?
+    /// Called on a TVCore thread; see setCaptions.
+    private var onCaption: ((CaptionPacket) -> Void)?
+    private let captionLock = NSLock()
     /// Seconds by which picture and sound are held back (see setOutputDelay).
     private(set) var outputDelay: Double = 0
     private let tapLock = NSLock()
@@ -100,6 +104,10 @@ final class Player {
             guard let ctx, let sb else { return }
             Unmanaged<Player>.fromOpaque(ctx).takeUnretainedValue().onTapAudio?(sb, gen)
         }
+        cb.on_caption = { ctx, superimpose, data, len, pts, gen in
+            guard let ctx, let data else { return }
+            Unmanaged<Player>.fromOpaque(ctx).takeUnretainedValue().caption(superimpose, Data(bytes: data, count: len), pts, gen)
+        }
         session = tv_session_create(cb)
         tv_session_set_deinterlace(session, Settings.shared.deinterlace)
         prewarmAudio()
@@ -147,6 +155,18 @@ final class Player {
 
     func setAudioTap(_ on: Bool) {
         tv_session_set_audio_tap(session, on)
+    }
+
+    /// Delivers the captions of the selected service to `handler`, on a TVCore thread. Nil stops it.
+    func setCaptions(_ handler: ((CaptionPacket) -> Void)?) {
+        captionLock.withLock { onCaption = handler }
+        tv_session_set_captions(session, handler != nil)
+    }
+
+    private func caption(_ superimpose: Bool, _ data: Data, _ pts: Int64, _ gen: UInt32) {
+        let packet = CaptionPacket(isSuperimpose: superimpose, presentationTime: pts < 0 ? nil : Double(pts) / 90000,
+                                   data: data, generation: gen)
+        captionLock.withLock { onCaption }?(packet)
     }
 
     /// Holds picture and sound back by `seconds` so that subtitles made from the audio tap can

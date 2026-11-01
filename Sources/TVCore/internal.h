@@ -31,7 +31,7 @@ int64_t now_ms(void);
 size_t arib_to_utf8(const uint8_t *src, size_t len, char *dst, size_t cap);
 
 // ---------------------------------------------------------------- demux
-enum { PES_VIDEO = 0, PES_AUDIO = 1 };
+enum { PES_VIDEO = 0, PES_AUDIO = 1, PES_CAPTION = 2, PES_SUPERIMPOSE = 3 };
 
 typedef struct {
     void *ctx;
