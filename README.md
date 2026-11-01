@@ -5,7 +5,7 @@ Windows の [TVTest](https://github.com/DBCTRADO/TVTest) の動作を大いに�
 
 ## ビルド
 
-必要なもの: Command Line Tools（Swift 6 系）、Homebrew の ffmpeg（`brew install ffmpeg`）。
+必要なもの: Command Line Tools（Swift 6 系）、Homebrew の ffmpeg（`brew install ffmpeg`）、データ放送を使うなら npm（`brew install node`）。
 
 ```sh
 ./build-app.sh        # → Bonbori.app を生成
@@ -13,6 +13,8 @@ open Bonbori.app
 ```
 
 初回起動時に「ローカルネットワークへのアクセス」の許可を求められるので、許可してください。
+
+データ放送の表示には [web-bml](https://github.com/otya128/web-bml) を使います。`build-app.sh` が npm で取得してアプリに取り込みます。npm が無いときはデータ放送なしでビルドします。
 
 放送字幕の内蔵音には [TVCaptionMod2](https://github.com/xtne6f/TVCaptionMod2) の音声を使います。規約があるのでこのリポジトリには含めず、`build-app.sh` が隣の `../TVCaptionMod2`（環境変数 `TVCAPTIONMOD2` で変更可）からアプリに取り込みます。見つからないときはシステムサウンドで鳴らします。
 
@@ -42,6 +44,7 @@ open Bonbori.app
 | S | 翻訳字幕（英語の音声を日本語に訳して表示）のオン / オフ |
 | K | 放送字幕のオン / オフ |
 | J | ニコニコ実況のオン / オフ |
+| G | データ放送をオンにする。オンの間はリモコンの d ボタン |
 | F / Return / ダブルクリック | フルスクリーン |
 | 右クリック / Control+クリック | メニュー（選局・録画・キャプチャ・音声・表示・設定） |
 
@@ -68,6 +71,33 @@ open Bonbori.app
 - システム設定 › アクセシビリティ › 字幕 のスタイルで放送より優先すると指定した項目（文字と背景の色、書体、文字の縁）は、そちらに従います。ただし文字の背景は、メニューで「放送のとおり」以外を選ぶとメニューが優先で、背景を透明にするスタイル（macOS の初期設定）では放送の背景を使います。「視差効果を減らす」がオンのときは点滅させません
 - `P` のキャプチャには字幕も写ります
 - ワンセグ字幕、UCS 符号の字幕、ブラジル方式の字幕には対応していません。縦書きの字幕は横書きとして表示します
+
+## データ放送
+
+`G`（またはメニュー「プラグイン」）でオンにすると（初期状態はオフ）、放送のデータを受け取り始めます。もう一度 `G` を押すと、テレビの d ボタンと同じようにデータ放送の画面が出ます。映像は画面の中の指定された位置に縮小され、放送字幕と実況コメントも一緒に動きます。[TVTDataBroadcastingWV2](https://github.com/otya128/TVTDataBroadcastingWV2) の機能を参考に、プラグインとして作り直したものです。
+
+- 受信が始まってから表示できるまで数秒から十数秒かかります。放送局によっては初回は 1 分近くかかります
+- 操作: データ放送の画面が出ている間は、次のキーがデータ放送に渡ります。文書が使っていないキーは、ふだんどおりの動作になります
+
+| キー | リモコンのボタン |
+|---|---|
+| ↑ ↓ ← → | 上下左右 |
+| Return | 決定 |
+| delete | 戻る |
+| F1 / F2 / F3 / F4 | 青 / 赤 / 緑 / 黄 |
+| 1〜9, 0, -, ^ | 数字（文書が数字キーを使うときだけ。使わないときは選局） |
+
+- メニュー「プラグイン」の「リモコンを表示」で、フローティングのリモコンを出せます。フルスクリーンの映像の上にも出ます。Bonbori が裏に回っている間は隠れます
+- 「受信機の設定…」で郵便番号と地域を設定すると、天気予報などが地域のものになります。放送局が受信機に保存した内容もここで削除できます（設定はデータ放送の受信中に開けます）
+- 文字の入力が必要なときはシートが開きます。日本語入力もふだんどおりに使えます
+- データ放送の効果音はアプリの音量に合わせて鳴ります。文書が音声を切り替えたときは、チャンネルを変えるかプラグインをオフにすると元に戻ります
+- `P` のキャプチャには、データ放送の画面が見えているとおりに写ります
+
+外部との通信は、初期状態ではしません。WebKit の中のページは Web に一切アクセスできず（コンテンツルールで全 URL を遮断）、外に出られるのはアプリが中継する BML の通信機能だけです。これを「通信機能を使う」で許可すると、通信コンテンツが使えるようになります。
+
+- サーバーの証明書はこの Mac の信頼設定で検証します。テレビ用の独自のルート証明書を使うサーバーには接続できません
+- 文書がブラウザでページを開こうとしたときは、開いてよいか確認します
+- ワンセグのデータ放送、Hybridcast には対応していません。マウスでの操作はできません
 
 ## ニコニコ実況
 
@@ -139,6 +169,15 @@ Sources/Plugins/Captions    放送字幕
   CaptionRenderer.swift     行の描画（Core Text）、システムの字幕スタイルの反映
   CaptionOverlay.swift      字幕プレーン（Core Animation）
   ARIBTables.swift          ARIB の色、追加記号、DRCS の置き換え表（生成）
+Sources/Plugins/DataBroadcasting  データ放送
+  DataBroadcastingPlugin.swift  ストリームの受け渡し、キー、音声、メニュー
+  BMLBrowser.swift              透明な WKWebView。独自スキームでページを配り、ほかの通信を遮断する
+  BMLNetwork.swift              通信コンテンツの中継（URLSession）
+  RemoteControl.swift           リモコン（NSPanel + SwiftUI）
+  ReceiverSettings.swift        受信機の設定（郵便番号・地域）
+  TextInput.swift               文字入力のシート
+  RemoteKey.swift               ARIB のキーコードとキーボードの対応
+Web/DataBroadcasting        WKWebView の中で動くページ。web-bml とプラグインをつなぐ
 Sources/tvprobe             コマンドラインの動作確認ツール
 ```
 
@@ -157,8 +196,10 @@ Sources/tvprobe             コマンドラインの動作確認ツール
 本体がプラグインに提供するもの:
 
 - 視聴中のサービス、映像が見えているか、映像の遅延（変化は通知される）。チャンネルスキャンと番組表の取得で巡回している間は「視聴中のサービスなし」として扱う
-- 再生の時計（放送の時刻軸での現在位置）と、視聴中のサービスの字幕データ
-- 映像の上、翻訳字幕と HUD の下に重ねるビュー。`installedPlugins` の後ろのプラグインほど手前に出る。キャプチャにも合成される
+- 再生の時計（放送の時刻軸での現在位置）と、視聴中のサービスの字幕データ、データ放送用の TS（表と文書のカルーセルと PCR。映像と音声は含まない）。どちらも映像の遅延を通って届く
+- 映像の上、翻訳字幕と HUD の下に重ねるビュー。`installedPlugins` の後ろのプラグインほど手前に出る。キャプチャにも合成される（Core Animation で描けないビューは、プラグインがキャプチャ用の画像を渡す）
+- 映像を画面の一部に縮小する指定、選局、音声の切り替え、音量と音声の変化の通知
+- 映像にフォーカスがあるときのキー（本体より先に受け取れる）
 - メニュー「プラグイン」（右クリックメニューにも出る）と、オン / オフのキー
 - プラグイン専用の設定の保存先、HUD のメッセージ、デバッグログ
 
@@ -183,9 +224,12 @@ BONBORI_GUIDE=1 .build/release/Bonbori          # 起動時に番組表を開く
 .build/release/tvprobe <サーバーのアドレス> BonDriver-T 0 4 5   # コアだけで受信テスト（space 0 / ch 4 を 5 秒）
 REC=/tmp/out.ts .build/release/tvprobe <サーバーのアドレス> BonDriver-S 0 16 90 245   # 受信した TS をそのまま保存（解析用）
 CAPDUMP=/tmp/cap.bin .build/release/tvprobe <サーバーのアドレス> BonDriver-T 0 4 90   # 受信した字幕データを保存（解析用）
+TSDUMP=/tmp/data.ts .build/release/tvprobe <サーバーのアドレス> BonDriver-T 0 4 30   # データ放送に渡す TS を保存（解析用）
 ```
 
-放送字幕のテストは次のコマンドで実行します。Command Line Tools だけの環境では、Swift Testing のマクロの場所を指定する必要があります。
+`BONBORI_DEBUG=1` のときは、データ放送のページのログも stderr に出て、Safari の Web インスペクタ（開発 › この Mac）からページを調べられます。
+
+放送字幕とデータ放送のテストは次のコマンドで実行します。Command Line Tools だけの環境では、Swift Testing のマクロの場所を指定する必要があります。
 
 ```sh
 TESTING=/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing
@@ -213,6 +257,9 @@ log show --last 1d --predicate 'subsystem == "net.ebycow.bonbori"'
 - [TVTest](https://github.com/DBCTRADO/TVTest)（DBCTRADO, GPL-2.0-or-later）: 番組表の取得（チャンネル巡回と完了判定）、ジャンル名、チャンネルの並び順、番組表の操作などの動作を参考にしています。参照には、そのフォークの [tsukumijima/TVTest](https://github.com/tsukumijima/TVTest) も使っています。
 - [LibISDB](https://github.com/DBCTRADO/LibISDB)（DBCTRADO, GPL-2.0-or-later）: ARIB 追加記号の文字列表記、音声タイムスタンプの許容ずれなどを参考にしています。
 - [BonDriverProxyEx](https://github.com/HaijinW/BonDriverProxyEx)（MIT License）: 通信プロトコル（`inc/BdpPacket.h`）に従って実装しています。HaijinW 版は、原作の [u-n-k-n-o-w-n/BonDriverProxyEx](https://github.com/u-n-k-n-o-w-n/BonDriverProxyEx) から [tkmsst/BonDriverProxyEx](https://github.com/tkmsst/BonDriverProxyEx) を経たフォークです。
+- [TVTDataBroadcastingWV2](https://github.com/otya128/TVTDataBroadcastingWV2)（otya, MIT License）: データ放送プラグインの動作と、`Web/DataBroadcasting/src/main.ts` の元になったコードを使っています。ライセンスは `Web/DataBroadcasting/LICENSE.TVTDataBroadcastingWV2` にあります。
+- [web-bml](https://github.com/otya128/web-bml)（otya, MIT License）: データ放送の BML の表示はこれが行います。ビルド時に取得し、アプリに同梱します。
+- [web-bml-fonts](https://www.npmjs.com/package/web-bml-fonts)（Kosugi / Kosugi Maru, Apache License 2.0）: データ放送の表示に使うフォントです。ビルド時に取得し、アプリに同梱します。
 - [FFmpeg](https://ffmpeg.org/): 映像・音声のデコードとインタレース解除に使っています。
 - [NicoJK](https://github.com/rutice/NicoJK)（rutice）と、そのフォークの [xtne6f/NicoJK](https://github.com/xtne6f/NicoJK)（xtne6f）: ニコニコ実況の表示の動作（行数と表示時間、コメントの配置、色の指定）を参考にしています。放送サービスと実況チャンネルの対応表は同梱の `jkch.sh.txt` から生成しています。
 - [jkcnsl](https://github.com/xtne6f/jkcnsl)（xtne6f, MIT License）: NX-Jikkyo との通信手順を参考にしています。
