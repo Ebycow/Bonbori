@@ -178,9 +178,9 @@ log show --last 1d --predicate 'subsystem == "net.ebycow.bonbori"'
 
 ## 参考にしたもの・謝辞
 
-- [TVTest](https://github.com/DBCTRADO/TVTest)（DBCTRADO, GPL-2.0-or-later）: 番組表の取得（チャンネル巡回と完了判定）、ジャンル名、チャンネルの並び順、番組表の操作などの動作を参考にしています。
+- [TVTest](https://github.com/DBCTRADO/TVTest)（DBCTRADO, GPL-2.0-or-later）: 番組表の取得（チャンネル巡回と完了判定）、ジャンル名、チャンネルの並び順、番組表の操作などの動作を参考にしています。参照には、そのフォークの [tsukumijima/TVTest](https://github.com/tsukumijima/TVTest) も使っています。
 - [LibISDB](https://github.com/DBCTRADO/LibISDB)（DBCTRADO, GPL-2.0-or-later）: ARIB 追加記号の文字列表記、音声タイムスタンプの許容ずれなどを参考にしています。
-- [BonDriverProxyEx](https://github.com/HaijinW/BonDriverProxyEx)（MIT License）: 通信プロトコル（`inc/BdpPacket.h`）に従って実装しています。
+- [BonDriverProxyEx](https://github.com/HaijinW/BonDriverProxyEx)（MIT License）: 通信プロトコル（`inc/BdpPacket.h`）に従って実装しています。HaijinW 版は、原作の [u-n-k-n-o-w-n/BonDriverProxyEx](https://github.com/u-n-k-n-o-w-n/BonDriverProxyEx) から [tkmsst/BonDriverProxyEx](https://github.com/tkmsst/BonDriverProxyEx) を経たフォークです。
 - [FFmpeg](https://ffmpeg.org/): 映像・音声のデコードとインタレース解除に使っています。
 - [NicoJK](https://github.com/rutice/NicoJK)（rutice）と、そのフォークの [xtne6f/NicoJK](https://github.com/xtne6f/NicoJK)（xtne6f）: ニコニコ実況の表示の動作（行数と表示時間、コメントの配置、色の指定）を参考にしています。放送サービスと実況チャンネルの対応表は同梱の `jkch.sh.txt` から生成しています。
 - [jkcnsl](https://github.com/xtne6f/jkcnsl)（xtne6f, MIT License）: NX-Jikkyo との通信手順を参考にしています。
