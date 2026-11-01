@@ -38,6 +38,7 @@ open Bonbori.app
 | R | 録画の開始 / 停止（TS をそのまま `~/Movies/Bonbori/` に保存） |
 | P | キャプチャ（PNG を `~/Pictures/Bonbori/` に保存） |
 | S | 翻訳字幕（英語の音声を日本語に訳して表示）のオン / オフ |
+| K | 放送字幕のオン / オフ |
 | J | ニコニコ実況のオン / オフ |
 | F / Return / ダブルクリック | フルスクリーン |
 | 右クリック / Control+クリック | メニュー（選局・録画・キャプチャ・音声・表示・設定） |
@@ -53,6 +54,18 @@ open Bonbori.app
 - 英語の原文を訳文の下に表示するかどうかも選べます。
 - 初回は音声認識モデルを自動でダウンロードします。英語→日本語の翻訳モデルが無いときは英語だけを表示します（システム設定 › 一般 › 言語と地域 › 翻訳言語 から追加できます）。
 - 実測（M1、MLB 中継の英語実況）: 文字起こしと翻訳を合わせて CPU 1 コアの 1 割未満。訳文は話し終わってから中央値 4 秒、9 割が 6 秒以内に出ます。
+
+## 放送字幕
+
+`K`（またはメニュー「プラグイン」）で、放送に含まれる字幕と文字スーパーを映像の上に表示します（初期状態はオフ）。[TVCaptionMod2](https://github.com/xtne6f/TVCaptionMod2) の機能を参考に、プラグインとして作り直したものです。
+
+- 表示: 放送が指定する位置、色、背景、文字サイズ（半角・倍角など）、縁取り、下線、囲み、点滅に対応します。文字はこの Mac のフォントで画面の解像度に合わせて描きます
+- 放送独自の文字（DRCS）と PNG の字幕も表示します。ドットの粗い DRCS は、対応表にあるものなら普通の文字に置き換えます
+- 字幕は放送の時刻（PTS）に合わせて出します。「映像を遅らせて字幕に合わせる」を使っているときも映像に合います
+- メニュー「プラグイン」で、書体（丸ゴシック / 角ゴシック / 明朝）、表示のタイミング、文字スーパーの表示、振り仮名を隠す、中央に小さく表示、内蔵音（緊急地震速報のチャイムなど）を切り替えられます。内蔵音は macOS のシステムサウンドで鳴らします。第 2 言語のある番組では言語も選べます
+- システム設定 › アクセシビリティ › 字幕 のスタイルで放送より優先すると指定した項目（文字と背景の色、書体、文字の縁）は、そちらに従います。「視差効果を減らす」がオンのときは点滅させません
+- `P` のキャプチャには字幕も写ります
+- ワンセグ字幕、UCS 符号の字幕、ブラジル方式の字幕には対応していません。縦書きの字幕は横書きとして表示します
 
 ## ニコニコ実況
 
@@ -90,7 +103,7 @@ BS/CS はどのトランスポンダにもネットワーク内の全サービ�
 Sources/TVCore (C)          BonDriverProxyEx プロトコル、TS デマルチプレクサ、ARIB 文字列、FFmpeg デコーダ
   session.c   TCP クライアント。受信スレッドで TS を受け取り、選局の応答を境に世代(gen)を切り替える。
               翻訳字幕用に、音声を遅延なしでもう一度デコードする経路と、映像・音声・時計をデコード前に遅らせる遅延バッファを持つ
-  demux.c     PAT/PMT/SDT/NIT/EIT/TOT、PES 組み立て、PCR、33bit ラップ処理、
+  demux.c     PAT/PMT/SDT/NIT/EIT/TOT、PES 組み立て（映像・音声・字幕・文字スーパー）、PCR、33bit ラップ処理、
               EIT（全サービスの p/f・schedule）を section 単位で重複除去して JSON で渡す、
               PMT が確定する前のパケットをリングバッファから再生して I フレームを取りこぼさない
   arib.c      ARIB STD-B24 8 単位符号 → UTF-8（JIS X 0208 は iconv、追加記号の一部）
@@ -117,6 +130,13 @@ Sources/Plugins/Jikkyo      ニコニコ実況
   CommentOverlay.swift      弾幕の表示（Core Text で描いた画像を Core Animation で動かす）
   Comment.swift             コメントの表示コマンドの解釈
   ChannelTable.swift        放送サービスから実況番号への対応表（生成）
+Sources/Plugins/Captions    放送字幕
+  CaptionPlugin.swift       表示するタイミングの管理、メニュー
+  CaptionStream.swift       字幕管理データ、言語の選択、DRCS と PNG の解釈
+  ARIBCaptionDecoder.swift  字幕文（8 単位符号）から、字幕プレーンに置いた行を作る
+  CaptionRenderer.swift     行の描画（Core Text）、システムの字幕スタイルの反映
+  CaptionOverlay.swift      字幕プレーン（Core Animation）
+  ARIBTables.swift          ARIB の色、追加記号、DRCS の置き換え表（生成）
 Sources/tvprobe             コマンドラインの動作確認ツール
 ```
 
@@ -135,7 +155,8 @@ Sources/tvprobe             コマンドラインの動作確認ツール
 本体がプラグインに提供するもの:
 
 - 視聴中のサービス、映像が見えているか、映像の遅延（変化は通知される）。チャンネルスキャンと番組表の取得で巡回している間は「視聴中のサービスなし」として扱う
-- 映像の上、字幕と HUD の下に重ねるビュー。キャプチャにも合成される
+- 再生の時計（放送の時刻軸での現在位置）と、視聴中のサービスの字幕データ
+- 映像の上、翻訳字幕と HUD の下に重ねるビュー。`installedPlugins` の後ろのプラグインほど手前に出る。キャプチャにも合成される
 - メニュー「プラグイン」（右クリックメニューにも出る）と、オン / オフのキー
 - プラグイン専用の設定の保存先、HUD のメッセージ、デバッグログ
 
@@ -159,6 +180,16 @@ BONBORI_DEBUG=1 BONBORI_DRIFT_TEST=3000 .build/release/Bonbori   # 時計が 300
 BONBORI_GUIDE=1 .build/release/Bonbori          # 起動時に番組表を開く（BONBORI_DEBUG=1 で番組表取得の各局の完了/タイムアウトも出す）
 .build/release/tvprobe <サーバーのアドレス> BonDriver-T 0 4 5   # コアだけで受信テスト（space 0 / ch 4 を 5 秒）
 REC=/tmp/out.ts .build/release/tvprobe <サーバーのアドレス> BonDriver-S 0 16 90 245   # 受信した TS をそのまま保存（解析用）
+CAPDUMP=/tmp/cap.bin .build/release/tvprobe <サーバーのアドレス> BonDriver-T 0 4 90   # 受信した字幕データを保存（解析用）
+```
+
+放送字幕のテストは次のコマンドで実行します。Command Line Tools だけの環境では、Swift Testing のマクロの場所を指定する必要があります。
+
+```sh
+TESTING=/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing
+swift test -Xswiftc -plugin-path -Xswiftc $TESTING
+# 保存した字幕データの中身を表示する（CAPTION_IMAGES を指定すると、描画結果を PNG で保存する）
+CAPTION_DUMP=/tmp/cap.bin CAPTION_IMAGES=/tmp/pages swift test --filter dump -Xswiftc -plugin-path -Xswiftc $TESTING
 ```
 
 旧名の `ITV_DEBUG` などの環境変数も、当面はそのまま使えます。
@@ -172,7 +203,6 @@ log show --last 1d --predicate 'subsystem == "net.ebycow.bonbori"'
 
 ## 未実装
 
-- 字幕（ARIB 字幕のデコードと描画）
 - 番組表の予約・キーワード検索の保存（今は表示と選局、表示中の放送内の検索のみ）
 - ハードウェアデコード（今は MPEG-2 ソフトウェアデコード＋bwdif で、地デジ視聴時は 1 コアの 20〜35%、M1 全体では数 %）
 
@@ -185,7 +215,8 @@ log show --last 1d --predicate 'subsystem == "net.ebycow.bonbori"'
 - [NicoJK](https://github.com/rutice/NicoJK)（rutice）と、そのフォークの [xtne6f/NicoJK](https://github.com/xtne6f/NicoJK)（xtne6f）: ニコニコ実況の表示の動作（行数と表示時間、コメントの配置、色の指定）を参考にしています。放送サービスと実況チャンネルの対応表は同梱の `jkch.sh.txt` から生成しています。
 - [jkcnsl](https://github.com/xtne6f/jkcnsl)（xtne6f, MIT License）: NX-Jikkyo との通信手順を参考にしています。
 - [NX-Jikkyo](https://github.com/tsukumijima/NX-Jikkyo)（tsukumijima, MIT License）: 実況コメントの受信に利用しています。
-- ARIB STD-B10 / STD-B24 などの規格。
+- [TVCaptionMod2](https://github.com/xtne6f/TVCaptionMod2)（xtne6f）と、その元になった odaru 氏の「字幕 Plugin For TVTest」、mark10als 氏・maki 氏の Caption2Ass_PCR 付属の Caption.dll 改造版: 字幕と文字スーパーの解釈と表示の動作を参考にしています。ARIB の色、追加記号の Unicode 対応表、DRCS の置き換え表は同梱の `ColorDef.h`、`GaijiTable.h`、`TVCaptionMod2_Gaiji_std.txt` から生成しています。
+- ARIB STD-B10 / STD-B24 / TR-B14 などの規格。
 
 ## 免責事項
 
