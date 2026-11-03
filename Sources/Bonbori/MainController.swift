@@ -583,6 +583,10 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         updateSubtitleSource()
     }
 
+    @objc func setSubtitleKeep(_ sender: NSMenuItem) {
+        Settings.shared.subtitleKeep = sender.tag == 1
+    }
+
     @objc func setSubtitleLayout(_ sender: NSMenuItem) {
         Settings.shared.subtitleLayout = SubtitleLayout(rawValue: sender.tag) ?? .auto
     }
@@ -928,6 +932,12 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         }
         srcItem.submenu = src
         menu.addItem(srcItem)
+        menu.addItem(.separator())
+        for (title, tag) in [("話し終わったら字幕を消す", 0), ("次の字幕まで表示し続ける", 1)] {
+            let it = menu.addItem(withTitle: title, action: #selector(setSubtitleKeep(_:)), keyEquivalent: "")
+            it.target = self
+            it.tag = tag
+        }
         let layoutItem = NSMenuItem(title: "表示レイアウト", action: nil, keyEquivalent: "")
         let layout = NSMenu()
         for (title, tag) in [("自動（翻訳が出たら日本語を大きく）", SubtitleLayout.auto),
@@ -970,6 +980,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             return Settings.shared.subtitleSync
         case #selector(setSubtitleSource(_:)):
             item.state = Settings.shared.subtitleSource == item.tag ? .on : .off
+        case #selector(setSubtitleKeep(_:)):
+            item.state = (Settings.shared.subtitleKeep ? 1 : 0) == item.tag ? .on : .off
         case #selector(setSubtitleLayout(_:)):
             item.state = Settings.shared.subtitleLayout.rawValue == item.tag ? .on : .off
         case #selector(startScan(_:)):

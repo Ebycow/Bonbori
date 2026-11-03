@@ -121,7 +121,8 @@ final class SubtitleController {
             return
         }
         if shown?.id != cue.id { shown = (cue.id, now) }
-        let hold = min(max(cue.end - cue.start + 1.5, 3), 8)
+        // Cues older than a minute are gone, so even a kept one goes out in a long silence.
+        let hold = Settings.shared.subtitleKeep ? .infinity : min(max(cue.end - cue.start + 1.5, 3), 8)
         // Without translations, a line kept for them would stay empty.
         let layout = translates ? Settings.shared.subtitleLayout : .auto
         view.show(now - shown!.at > hold ? nil : cue, layout: layout)

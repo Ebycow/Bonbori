@@ -172,6 +172,11 @@ final class Settings {
         get { d.integer(forKey: "subtitleSource") }
         set { d.set(newValue, forKey: "subtitleSource") }
     }
+    /// Leave a subtitle up until the next one, instead of clearing it after its speech.
+    var subtitleKeep: Bool {
+        get { d.bool(forKey: "subtitleKeep") }
+        set { d.set(newValue, forKey: "subtitleKeep") }
+    }
     /// Which language is shown large, and whether the lines stay put (see SubtitleLayout).
     var subtitleLayout: SubtitleLayout {
         get {
