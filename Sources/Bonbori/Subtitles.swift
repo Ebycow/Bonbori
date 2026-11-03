@@ -14,6 +14,20 @@ struct SubtitleCue {
     var translation: String?
 }
 
+/// How the two languages share the subtitle box.
+enum SubtitleLayout: Int {
+    /// The English large until its translation comes, then the Japanese large and the English small.
+    case auto = 0
+    /// Always the Japanese large above the English small; the Japanese line waits empty for its translation.
+    case jaLarge = 1
+    /// Always the English large above the Japanese small.
+    case enLarge = 2
+    /// The translation only (the English stands in until it comes).
+    case jaOnly = 3
+
+    var isFixed: Bool { self == .jaLarge || self == .enLarge }
+}
+
 /// 翻訳字幕: shows the English speech of the broadcast, translated into Japanese.
 ///
 /// Recognition runs on the player's audio tap, which is decoded as soon as it arrives. Cues
@@ -26,6 +40,7 @@ final class SubtitleController {
     private var engine: AnyObject?  // SubtitleEngine (macOS 26)
     private var cues: [SubtitleCue] = []
     private var shown: (id: Int, at: Double)?
+    private var translates = true  // false when there is no translation model
     private var timer: Timer?
     private let debug = envVar("DEBUG") != nil
     var onStatus: ((String) -> Void)?
@@ -55,6 +70,8 @@ final class SubtitleController {
         e.channel = channel
         e.onCue = { [weak self] cue in self?.received(cue) }
         e.onStatus = { [weak self] msg in self?.onStatus?(msg) }
+        e.onTranslationUnavailable = { [weak self] in self?.translates = false }
+        translates = true
         player.onTapAudio = { [weak e] sb, gen in e?.feed(sb, gen: gen) }
         engine = e
         e.start()
@@ -76,7 +93,7 @@ final class SubtitleController {
     func reset() {
         cues.removeAll()
         shown = nil
-        view.show(nil, showOriginal: true)
+        view.show(nil, layout: .auto)
     }
 
     private func received(_ cue: SubtitleCue) {
@@ -100,12 +117,14 @@ final class SubtitleController {
         // Older than a minute, or from another timeline.
         cues.removeAll { $0.end < now - 60 || $0.start > now + 60 }
         guard let cue = cues.last(where: { $0.start <= now }) else {
-            view.show(nil, showOriginal: true)
+            view.show(nil, layout: .auto)
             return
         }
         if shown?.id != cue.id { shown = (cue.id, now) }
         let hold = min(max(cue.end - cue.start + 1.5, 3), 8)
-        view.show(now - shown!.at > hold ? nil : cue, showOriginal: Settings.shared.subtitleShowOriginal)
+        // Without translations, a line kept for them would stay empty.
+        let layout = translates ? Settings.shared.subtitleLayout : .auto
+        view.show(now - shown!.at > hold ? nil : cue, layout: layout)
     }
 }
 
@@ -116,6 +135,8 @@ final class SubtitleEngine: @unchecked Sendable {
     var onCue: ((SubtitleCue) -> Void)?
     /// Main thread: model download state and problems, for the HUD.
     var onStatus: ((String) -> Void)?
+    /// Main thread: there is no translation model, so cues will stay English only.
+    var onTranslationUnavailable: (() -> Void)?
 
     private let lock = NSLock()
     private var _channel = 3
@@ -210,6 +231,7 @@ final class SubtitleEngine: @unchecked Sendable {
         } catch {
             if envVar("DEBUG") != nil { debugLog("subtitle", "translation unavailable: \(error)") }
             session = nil
+            DispatchQueue.main.async { self.onTranslationUnavailable?() }
             status("翻訳字幕: 英語→日本語の翻訳モデルがありません。英語のみ表示します\n（システム設定 › 一般 › 言語と地域 › 翻訳言語 から追加できます）")
         }
         if let session {
@@ -332,11 +354,13 @@ final class SubtitleEngine: @unchecked Sendable {
     }
 }
 
-/// Subtitle box at the bottom of the picture: the translation, and the original below it.
+/// Subtitle box at the bottom of the picture: one language large, and the other small below it.
 final class SubtitleOverlay: NSView {
     private let main = NSTextField(wrappingLabelWithString: "")
     private let sub = NSTextField(wrappingLabelWithString: "")
-    private var current: (id: Int, ja: String?, en: String, orig: Bool)?
+    private var current: (id: Int, ja: String?, layout: SubtitleLayout)?
+    /// Both lines keep their place even while one is empty (a fixed layout).
+    private var keepsLines = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -357,21 +381,30 @@ final class SubtitleOverlay: NSView {
     required init?(coder: NSCoder) { fatalError() }
     override var isFlipped: Bool { true }
 
-    func show(_ cue: SubtitleCue?, showOriginal: Bool) {
+    func show(_ cue: SubtitleCue?, layout: SubtitleLayout) {
         guard let cue else {
             if !isHidden { isHidden = true; current = nil }
             return
         }
-        if let c = current, c.id == cue.id, c.ja == cue.translation, c.orig == showOriginal, !isHidden { return }
-        current = (cue.id, cue.translation, cue.original, showOriginal)
-        if let ja = cue.translation {
-            main.stringValue = ja
-            sub.stringValue = showOriginal ? cue.original : ""
-        } else {
+        if let c = current, c.id == cue.id, c.ja == cue.translation, c.layout == layout, !isHidden { return }
+        current = (cue.id, cue.translation, layout)
+        let en = cue.original, ja = cue.translation
+        switch layout {
+        case .auto:
             // translation pending (or unavailable): the original stands in
-            main.stringValue = cue.original
+            main.stringValue = ja ?? en
+            sub.stringValue = ja == nil ? "" : en
+        case .jaLarge:
+            main.stringValue = ja ?? ""
+            sub.stringValue = en
+        case .enLarge:
+            main.stringValue = en
+            sub.stringValue = ja ?? ""
+        case .jaOnly:
+            main.stringValue = ja ?? en
             sub.stringValue = ""
         }
+        keepsLines = layout.isFixed
         isHidden = false
         superview?.needsLayout = true
     }
@@ -384,9 +417,14 @@ final class SubtitleOverlay: NSView {
         sub.font = .systemFont(ofSize: size * 0.62, weight: .regular)
         let maxW = video.width * 0.86
         let inset: CGFloat = size * 0.5
-        let m = main.sizeThatFits(NSSize(width: maxW - inset * 2, height: 1000))
-        let hasSub = !sub.stringValue.isEmpty
-        let s = hasSub ? sub.sizeThatFits(NSSize(width: maxW - inset * 2, height: 1000)) : .zero
+        // An empty line of a fixed layout still takes one line's height, so the box keeps its shape.
+        func fit(_ f: NSTextField) -> NSSize {
+            if f.stringValue.isEmpty { return NSSize(width: 0, height: NSLayoutManager().defaultLineHeight(for: f.font!)) }
+            return f.sizeThatFits(NSSize(width: maxW - inset * 2, height: 1000))
+        }
+        let m = fit(main)
+        let hasSub = keepsLines || !sub.stringValue.isEmpty
+        let s = hasSub ? fit(sub) : .zero
         let w = min(max(m.width, s.width), maxW - inset * 2)
         let gap: CGFloat = hasSub ? size * 0.2 : 0
         let h = m.height + gap + s.height
