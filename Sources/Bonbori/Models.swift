@@ -172,10 +172,19 @@ final class Settings {
         get { d.integer(forKey: "subtitleSource") }
         set { d.set(newValue, forKey: "subtitleSource") }
     }
-    /// Show the recognized English under the translation.
-    var subtitleShowOriginal: Bool {
-        get { d.object(forKey: "subtitleShowOriginal") == nil ? true : d.bool(forKey: "subtitleShowOriginal") }
-        set { d.set(newValue, forKey: "subtitleShowOriginal") }
+    /// Leave a subtitle up until the next one, instead of clearing it after its speech.
+    var subtitleKeep: Bool {
+        get { d.bool(forKey: "subtitleKeep") }
+        set { d.set(newValue, forKey: "subtitleKeep") }
+    }
+    /// Which language is shown large, and whether the lines stay put (see SubtitleLayout).
+    var subtitleLayout: SubtitleLayout {
+        get {
+            if let v = d.object(forKey: "subtitleLayout") as? Int { return SubtitleLayout(rawValue: v) ?? .auto }
+            // the earlier "英語の原文も表示" switch
+            return d.object(forKey: "subtitleShowOriginal") as? Bool == false ? .jaOnly : .auto
+        }
+        set { d.set(newValue.rawValue, forKey: "subtitleLayout") }
     }
     /// Include terrestrial/BS sub-channels (e.g. NHK総合2) when zapping.
     var showSubChannels: Bool {
