@@ -299,6 +299,38 @@ public final class DataBroadcastingPlugin: NSObject, BonboriPlugin {
         browser?.call("key", [key.rawValue])
     }
 
+    // MARK: - Touch Bar
+
+    /// The data button and the four colour buttons, like the remote control.
+    public func makeTouchBarItems() -> [NSTouchBarItem] {
+        let data = NSButton(image: NSImage(systemSymbolName: "d.square", accessibilityDescription: "データ") ?? NSImage(),
+                            target: self, action: #selector(touchBarPressed(_:)))
+        data.tag = RemoteKey.dataButton.rawValue
+        data.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        var views: [NSView] = [data]
+        for (key, label, color) in [(RemoteKey.blue, "青", NSColor(srgbRed: 0, green: 0.447, blue: 0.839, alpha: 1)),
+                                    (.red, "赤", NSColor(srgbRed: 0.788, green: 0, blue: 0, alpha: 1)),
+                                    (.green, "緑", NSColor(srgbRed: 0.106, green: 0.529, blue: 0, alpha: 1)),
+                                    (.yellow, "黄", NSColor(srgbRed: 0.89, green: 0.698, blue: 0, alpha: 1))] {
+            let button = NSButton(title: "", target: self, action: #selector(touchBarPressed(_:)))
+            button.tag = key.rawValue
+            button.bezelColor = color
+            button.setAccessibilityLabel(label)
+            button.widthAnchor.constraint(equalToConstant: 30).isActive = true
+            views.append(button)
+        }
+        let stack = NSStackView(views: views)
+        stack.spacing = 4
+        let item = NSCustomTouchBarItem(identifier: NSTouchBarItem.Identifier("net.ebycow.bonbori.plugin.databroadcasting.remote"))
+        item.view = stack
+        item.customizationLabel = "データ放送のリモコン"
+        return [item]
+    }
+
+    @objc private func touchBarPressed(_ sender: NSButton) {
+        RemoteKey(rawValue: sender.tag).map(press)
+    }
+
     // MARK: - Capture
 
     public func snapshotOverlay(completion: @escaping (CGImage?) -> Void) {
