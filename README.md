@@ -48,6 +48,8 @@ open Bonbori.app
 | F / Return / ダブルクリック | フルスクリーン |
 | 右クリック / Control+クリック | メニュー（選局・録画・キャプチャ・音声・表示・設定） |
 
+Touch Bar のある Mac では、Touch Bar に地デジ / BS / CS の切り替え、チャンネルの一覧（なぞって選局）、録画、音量（タップでミュートとスライダー）が出ます。並びはメニュー「表示」→「Touch Bar をカスタマイズ…」で変えられ、キャプチャ・翻訳字幕・チャンネル一覧・番組表・フルスクリーンのボタンも置けます。
+
 ## 翻訳字幕
 
 `S`（またはメニュー「字幕」）で、放送中の英語の音声をこの Mac 上で文字に起こし、日本語に訳して画面下に表示します（macOS 26 以降）。MLB 中継の副音声（現地実況）などを想定しています。音声認識は Speech フレームワーク、翻訳は Translation フレームワークで、どちらもオフラインで動きます。
@@ -154,6 +156,7 @@ Sources/Bonbori (Swift/AppKit)
   ProgramDetailView.swift   インスペクタの番組詳細（SwiftUI）
   ProgramSearchView.swift   番組表の検索結果の一覧（SwiftUI）
   Subtitles.swift           翻訳字幕（音声認識・翻訳、PTS に合わせた表示）
+  MainTouchBar.swift        メインウインドウの Touch Bar（NSScrubber の選局、音量のポップオーバー）
   PluginManager.swift       プラグインの管理。本体とプラグインの接点はここだけ
   InstalledPlugins.swift    組み込むプラグインの一覧
 Sources/BonboriPluginKit    プラグインから見える API（BonboriPlugin / PluginHost）

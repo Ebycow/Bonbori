@@ -14,8 +14,10 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         m.selectAudio = { [unowned self] in selectAudio($0) }
         m.tuneService = { [unowned self] in tuneService(networkID: $0, transportStreamID: $1, serviceID: $2) }
         m.tuneRemoteKey = { [unowned self] in tuneKey($0) }
+        m.touchBarChanged = { [unowned self] in rebuildTouchBar() }
         return m
     }()
+    private lazy var touchBar = MainTouchBar(controller: self)
     private let store = ChannelStore.shared
     private lazy var listPanel = ChannelListPanel(controller: self)
     private var guideWindow: ProgramGuideWindowController?
@@ -82,6 +84,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         buildMenus()
         applySubtitleSettings()
         plugins.start()
+        rebuildTouchBar()
         if Settings.shared.host.isEmpty {
             DispatchQueue.main.async { [weak self] in self?.showSettings(nil) }
             return
@@ -146,6 +149,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         guideWindow?.currentChannelChanged()
         updateSleepActivity()
         updatePlugins()
+        touchBar.refresh()
     }
 
     /// Tells the plugins what is being watched. Channels passed through by a scan or
@@ -317,6 +321,20 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         player.volume += delta
         videoView.showHUD("音量 \(Int((player.volume * 100).rounded()))%", nil, duration: 1.5)
         plugins.volumeChanged()
+        touchBar.refresh()
+    }
+
+    /// Sets the volume from a slider, which also ends the mute.
+    func setVolume(_ volume: Float) {
+        player.volume = volume
+        player.isMuted = false
+        videoView.showHUD("音量 \(Int((player.volume * 100).rounded()))%", nil, duration: 1.5)
+        plugins.volumeChanged()
+        touchBar.refresh()
+    }
+
+    private func rebuildTouchBar() {
+        window.touchBar = touchBar.make(pluginItems: plugins.touchBarItems())
     }
 
     private func handleKey(_ e: NSEvent) -> Bool {
@@ -386,6 +404,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             videoView.showHUD("録画停止", String(format: "%.1f MB", Double(bytes) / 1e6), duration: 3)
             updateTitle()
             updateSleepActivity()
+            touchBar.refresh()
             return
         }
         let url = outputDir(.moviesDirectory).appendingPathComponent(fileStem() + ".ts")
@@ -396,6 +415,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         }
         updateTitle()
         updateSleepActivity()
+        touchBar.refresh()
     }
 
     @objc func capture(_ sender: Any?) {
@@ -415,6 +435,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         player.isMuted.toggle()
         videoView.showHUD(player.isMuted ? "ミュート" : "ミュート解除", nil, duration: 1.5)
         plugins.volumeChanged()
+        touchBar.refresh()
     }
 
     @objc func toggleInfo(_ sender: Any?) {
@@ -560,6 +581,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         }
         Settings.shared.subtitles.toggle()
         applySubtitleSettings()
+        touchBar.refresh()
         let s = Settings.shared
         if s.subtitles {
             videoView.showHUD("翻訳字幕 オン", s.subtitleSync ? "映像を \(Int(s.subtitleDelay)) 秒遅らせて字幕に合わせます" : "字幕はできしだい表示します（数秒遅れます）", duration: 3)
@@ -589,6 +611,10 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
 
     @objc func setSubtitleLayout(_ sender: NSMenuItem) {
         Settings.shared.subtitleLayout = SubtitleLayout(rawValue: sender.tag) ?? .auto
+    }
+
+    @objc func customizeTouchBar(_ sender: Any?) {
+        NSApp.toggleTouchBarCustomizationPalette(sender)
     }
 
     @objc func toggleFloat(_ sender: NSMenuItem) {
@@ -642,6 +668,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             }
             self.videoView.setCenterMessage(nil)
             self.buildMenus()
+            self.touchBar.refresh()
             self.listPanel.reload()
             self.guideWindow?.reload()
             let tv = list.filter { [0x01, 0xA5, 0xAD].contains($0.serviceType) }.count
@@ -685,6 +712,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         s.serverB25 = b25.state == .on
         s.showSubChannels = subch.state == .on
         buildMenus()
+        touchBar.refresh()
         listPanel.reload()
         guideWindow?.reload()
         player.stop()
@@ -726,6 +754,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         let viewItem = NSMenuItem()
         let view = NSMenu(title: "表示")
         view.addItem(withTitle: "フルスクリーン", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
+        // NSApp.isAutomaticCustomizeTouchBarMenuItemEnabled does not add it to this menu
+        view.addItem(withTitle: "Touch Bar をカスタマイズ…", action: #selector(customizeTouchBar(_:)), keyEquivalent: "").target = self
         addDisplayOptionItems(to: view)
         view.addItem(.separator())
         addRecordItems(to: view)
