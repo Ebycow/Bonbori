@@ -13,6 +13,8 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
     var selectAudio: (AudioSelection) -> Void = { _ in }
     var tuneService: (_ networkID: Int, _ transportStreamID: Int, _ serviceID: Int) -> Bool = { _, _, _ in false }
     var tuneRemoteKey: (Int) -> Void = { _ in }
+    /// The plugins' Touch Bar items may have changed.
+    var touchBarChanged: () -> Void = {}
 
     private let player: Player
     private let videoView: VideoView
@@ -117,6 +119,7 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
         guard s.isActive != on else { return }
         s.isActive = on
         if on { s.plugin.activate() } else { s.plugin.deactivate() }
+        touchBarChanged()
     }
 
     private func toggle(_ s: Slot) {
@@ -170,7 +173,12 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
         group.notify(queue: .main) { completion(images.compactMap { $0 }) }
     }
 
-    // MARK: - Keys and menus
+    // MARK: - Keys, menus and the Touch Bar
+
+    /// The Touch Bar items of the active plugins, in the order of the plugins.
+    func touchBarItems() -> [NSTouchBarItem] {
+        slots.filter(\.isActive).flatMap { $0.plugin.makeTouchBarItems() }
+    }
 
     /// Offers a key to the active plugins before the app acts on it.
     func offerKey(_ event: NSEvent) -> Bool {

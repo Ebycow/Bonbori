@@ -106,6 +106,10 @@ public protocol BonboriPlugin: AnyObject {
     /// What this plugin shows, for an overlay `addOverlay` cannot put in a capture, sized like the
     /// picture. It goes under the other plugins' overlays. Only called while active.
     func snapshotOverlay(completion: @escaping (CGImage?) -> Void)
+    /// Items for the Touch Bar of the main window, shown after the app's channels. Asked again each
+    /// time a plugin is turned on or off. Give each item an identifier of its own, starting with
+    /// "net.ebycow.bonbori.plugin.<id>.", and a `customizationLabel`. Only called while active.
+    func makeTouchBarItems() -> [NSTouchBarItem]
 }
 
 public extension BonboriPlugin {
@@ -113,6 +117,7 @@ public extension BonboriPlugin {
     func makeMenuItems() -> [NSMenuItem] { [] }
     func handleKey(_ event: NSEvent) -> Bool { false }
     func snapshotOverlay(completion: @escaping (CGImage?) -> Void) { completion(nil) }
+    func makeTouchBarItems() -> [NSTouchBarItem] { [] }
 }
 
 /// What the app offers to a plugin. Everything here is to be used on the main thread.
