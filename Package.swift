@@ -1,8 +1,23 @@
 // swift-tools-version:5.9
 // SPDX-License-Identifier: GPL-2.0-or-later
+import Foundation
+import MachO
 import PackageDescription
 
 let ffmpegPrefix = "/opt/homebrew/opt/ffmpeg"
+
+/// Swift Build leaves out, on every other build, the flag that loads swift-testing's macros, and
+/// `@Test` then fails to expand. So the tests name the plugin themselves, from the toolchain whose
+/// PackageDescription runs this manifest.
+let testingMacros: [SwiftSetting] = {
+    let api = "/lib/swift/pm/ManifestAPI/libPackageDescription.dylib"
+    let images = (0..<_dyld_image_count()).compactMap { _dyld_get_image_name($0).map { String(cString: $0) } }
+    guard let usr = images.first(where: { $0.hasSuffix(api) }).map({ String($0.dropLast(api.count)) }) else { return [] }
+    let plugins = usr + "/lib/swift/host/plugins/testing"
+    let server = usr + "/bin/swift-plugin-server"
+    guard FileManager.default.fileExists(atPath: plugins), FileManager.default.fileExists(atPath: server) else { return [] }
+    return [.unsafeFlags(["-external-plugin-path", plugins + "#" + server])]
+}()
 
 let package = Package(
     name: "Bonbori",
@@ -60,12 +75,14 @@ let package = Package(
         .testTarget(
             name: "CaptionsTests",
             dependencies: ["Captions"],
-            path: "Tests/CaptionsTests"
+            path: "Tests/CaptionsTests",
+            swiftSettings: testingMacros
         ),
         .testTarget(
             name: "DataBroadcastingTests",
             dependencies: ["DataBroadcasting"],
-            path: "Tests/DataBroadcastingTests"
+            path: "Tests/DataBroadcastingTests",
+            swiftSettings: testingMacros
         ),
         .executableTarget(
             name: "Bonbori",
