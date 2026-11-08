@@ -87,7 +87,8 @@ public final class CaptionPlugin: NSObject, BonboriPlugin {
         let plane: CaptionOverlay.Plane = packet.isSuperimpose ? .superimpose : .caption
         let stream = packet.isSuperimpose ? superimpose : captions
         let items = stream.feed([UInt8](packet.data))
-        guard !items.isEmpty, !packet.isSuperimpose || showsSuperimpose else { return }
+        // still fed while hidden, so that turning it back on does not wait for the language again
+        guard !items.isEmpty, shows(plane) else { return }
 
         let immediate = packet.isSuperimpose || timing == CaptionPlugin.asReceived
         let base = immediate ? host.presentationTime : packet.presentationTime
@@ -194,6 +195,7 @@ public final class CaptionPlugin: NSObject, BonboriPlugin {
                                       ("受信したらすぐ", CaptionPlugin.asReceived)],
                                      current: timing, action: #selector(setTiming(_:)))
         items.append(timingItem)
+        items.append(toggle("字幕を表示", showsCaptions, #selector(toggleCaptions)))
         items.append(toggle("文字スーパーを表示", showsSuperimpose, #selector(toggleSuperimpose)))
         items.append(toggle("振り仮名を隠す", hidesRuby, #selector(toggleRuby)))
         items.append(toggle("中央に小さく表示", isCentered, #selector(toggleCentered)))
@@ -248,6 +250,11 @@ public final class CaptionPlugin: NSObject, BonboriPlugin {
         set { host.defaults.set(newValue, forKey: "timing") }
     }
 
+    private var showsCaptions: Bool {
+        get { host.defaults.object(forKey: "captions") == nil || host.defaults.bool(forKey: "captions") }
+        set { host.defaults.set(newValue, forKey: "captions") }
+    }
+
     private var showsSuperimpose: Bool {
         get { host.defaults.object(forKey: "superimpose") == nil || host.defaults.bool(forKey: "superimpose") }
         set { host.defaults.set(newValue, forKey: "superimpose") }
@@ -288,12 +295,27 @@ public final class CaptionPlugin: NSObject, BonboriPlugin {
         timing = sender.tag
     }
 
+    private func shows(_ plane: CaptionOverlay.Plane) -> Bool {
+        switch plane {
+        case .caption: return showsCaptions
+        case .superimpose: return showsSuperimpose
+        }
+    }
+
+    @objc private func toggleCaptions() {
+        showsCaptions.toggle()
+        hideIfOff(.caption)
+    }
+
     @objc private func toggleSuperimpose() {
         showsSuperimpose.toggle()
-        if !showsSuperimpose {
-            waiting[.superimpose] = nil
-            overlay.clear(.superimpose)
-        }
+        hideIfOff(.superimpose)
+    }
+
+    private func hideIfOff(_ plane: CaptionOverlay.Plane) {
+        guard !shows(plane) else { return }
+        waiting[plane] = nil
+        overlay.clear(plane)
     }
 
     @objc private func toggleRuby() {
