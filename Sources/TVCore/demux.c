@@ -16,6 +16,9 @@
 #define EIT_SEEN_SLOTS 65536  // EIT sections already passed on in this tune (BS carries ~30k)
 #define TAG_CAPTION 0x30      // component tag of the default 字幕 ES
 #define TAG_SUPERIMPOSE 0x38  // component tag of the default 文字スーパー ES
+#define MAX_LOGO_PIDS 8       // 全受信機共通データ carousels of the engineering services
+#define MAX_LOGO_MODULES 16   // LOGO-00..05 and CS_LOGO-00..05
+#define MAX_LOGO_MODULE_SIZE (4 * 1024 * 1024)
 
 typedef struct {
     uint8_t *buf;
@@ -44,6 +47,18 @@ typedef struct {
     int type;
     char name[128];
 } service_info;
+
+// One logo module of a 全受信機共通データ carousel, assembled from its DDB blocks.
+typedef struct {
+    int pid;
+    uint32_t download_id;
+    int module_id, version, block_size;
+    uint32_t size;
+    int nblocks, got;
+    uint8_t *data;  // NULL once complete
+    uint8_t *have;  // one byte per block
+    bool done;
+} logo_module;
 
 typedef struct {
     int event_id;
@@ -113,8 +128,19 @@ struct tv_demux {
 
     atomic_bool ts_tap_on;
 
+    // logos of BS/CS: engineering services and their 全受信機共通データ carousels
+    int eng_pmt[MAX_PROGRAMS];
+    int neng_pmt;
+    int logo_pid[MAX_LOGO_PIDS];
+    int nlogo_pid;
+    logo_module logo_mods[MAX_LOGO_MODULES];
+    int nlogo_mods;
+
     tv_demux_stats stats;
 };
+
+static void update_eng_pmts(tv_demux *d);
+static void free_logo_modules(tv_demux *d);
 
 static void reset_pes(pes_asm *p)
 {
@@ -153,6 +179,7 @@ void tv_demux_destroy(tv_demux *d)
     free(d->ring);
     free(d->eit_keys);
     free(d->eit_vers);
+    free_logo_modules(d);
     free(d);
 }
 
@@ -199,6 +226,9 @@ void tv_demux_reset(tv_demux *d, int sid)
     d->last_tot = 0;
     memset(d->eit_keys, 0, EIT_SEEN_SLOTS * sizeof(uint64_t));
     d->eit_count = 0;
+    d->neng_pmt = 0;
+    d->nlogo_pid = 0;
+    free_logo_modules(d);
     memset(&d->stats, 0, sizeof(d->stats));
 }
 
@@ -344,7 +374,10 @@ static void emit_stream(tv_demux *d)
     sb_json_str(&b, vst >= 0 ? stream_type_name(vst) : "");
     sb_puts(&b, ",\"audio\":");
     sb_json_str(&b, ast >= 0 ? stream_type_name(ast) : "");
-    sb_printf(&b, ",\"audio_count\":%d,\"audio_index\":%d}", naudio, d->audio_index);
+    sb_printf(&b, ",\"audio_count\":%d,\"audio_index\":%d,\"es\":[", naudio, d->audio_index);
+    for (int i = 0; i < d->nes; i++)
+        sb_printf(&b, "%s[%d,%d,%d]", i ? "," : "", d->es[i].pid, d->es[i].stream_type, d->es[i].component_tag);
+    sb_puts(&b, "]}");
     emit(d, TV_EV_STREAM, &b);
 }
 
@@ -379,6 +412,10 @@ static void choose_program(tv_demux *d)
         for (int i = 0; i < d->nprog; i++)
             if (d->prog[i].number == d->target_sid)
                 sid = d->target_sid;
+        // A requested service that is not in the PAT is off the air (a temporary or promotional
+        // service): wait for it to start rather than show another service of the TS.
+        if (sid < 0)
+            return;
     }
     if (sid < 0 && d->nservices > 0) {
         // first TV service in SDT order that is in the PAT
@@ -450,7 +487,8 @@ static void replay_ring(tv_demux *d)
     }
 }
 
-static void apply_es_selection(tv_demux *d)
+// Returns whether the video or audio ES changed (TV_EV_STREAM is then sent).
+static bool apply_es_selection(tv_demux *d)
 {
     int vpid = -1, vst = -1, apid = -1, ast = -1, ai = 0, cpid = -1, spid = -1;
     for (int i = 0; i < d->nes; i++) {
@@ -496,6 +534,7 @@ static void apply_es_selection(tv_demux *d)
         emit_stream(d);
         replay_ring(d);
     }
+    return changed;
 }
 
 void tv_demux_select_audio(tv_demux *d, int index)
@@ -540,6 +579,7 @@ static void parse_pat(tv_demux *d, const uint8_t *s, int len)
     if (!found)
         d->cur_sid = -1;
     choose_program(d);
+    update_eng_pmts(d);
 }
 
 static void parse_pmt(tv_demux *d, const uint8_t *s, int len)
@@ -572,7 +612,9 @@ static void parse_pmt(tv_demux *d, const uint8_t *s, int len)
         d->nes++;
         i += 5 + eslen;
     }
-    apply_es_selection(d);
+    // A service without picture and sound (data, engineering) changes neither: report it anyway.
+    if (!apply_es_selection(d))
+        emit_stream(d);
 }
 
 static void parse_sdt(tv_demux *d, const uint8_t *s, int len)
@@ -639,6 +681,7 @@ static void parse_sdt(tv_demux *d, const uint8_t *s, int len)
             else if (d->cur_sid != prev && d->cb.on_service_switch)
                 d->cb.on_service_switch(d->cb.ctx, d->cur_sid);
         }
+        update_eng_pmts(d);
         emit_services(d);
     }
 }
@@ -719,6 +762,261 @@ static bool eit_seen_update(tv_demux *d, uint64_t key, int version)
     }
     d->eit_vers[i] = (uint8_t)version;
     return true;
+}
+
+// ----------------------------------------------------------------- logos
+// The logo of each service: the SDT names its logo_id (logo transmission descriptor), and the CDT
+// carries the PNG of each logo_id. Satellites also describe the services of the other TSs (SDT
+// other), so one TS is enough to learn most of the logo ids of a network. The keys share the EIT's
+// "seen" table: their top byte is a table id that the EIT does not use.
+static void parse_sdt_logos(tv_demux *d, const uint8_t *s, int len)
+{
+    if (len < 15 || !(s[5] & 1) || !d->cb.on_event)
+        return;
+    int tid = s[0], tsid = (s[3] << 8) | s[4], version = (s[5] >> 1) & 0x1F, secno = s[6];
+    int onid = (s[8] << 8) | s[9];
+    uint64_t key = ((uint64_t)tid << 56) | ((uint64_t)onid << 40) | ((uint64_t)tsid << 24) | (uint64_t)secno;
+    if (!eit_seen_update(d, key, version))
+        return;
+    sbuf b;
+    sb_init(&b);
+    sb_printf(&b, "{\"onid\":%d,\"tsid\":%d,\"services\":[", onid, tsid);
+    int n = 0;
+    for (int i = 11; i + 5 <= len - 4;) {
+        int sid = (s[i] << 8) | s[i + 1];
+        int dlen = ((s[i + 3] & 0x0F) << 8) | s[i + 4];
+        for (int j = i + 5; j + 2 <= i + 5 + dlen && j + 2 <= len - 4;) {
+            int dt = s[j], dl = s[j + 1];
+            // logo_transmission_type 1 (CDT) and 2 (logo_id only) name a logo_id; 3 is a text logo.
+            if (dt == 0xCF && dl >= 3 && (s[j + 2] == 1 || s[j + 2] == 2)) {
+                int logo_id = ((s[j + 3] & 1) << 8) | s[j + 4];
+                sb_printf(&b, "%s{\"sid\":%d,\"logo\":%d}", n++ ? "," : "", sid, logo_id);
+            }
+            j += 2 + dl;
+        }
+        i += 5 + dlen;
+    }
+    sb_puts(&b, "]}");
+    if (n > 0)
+        emit(d, TV_EV_SERVICE_LOGOS, &b);
+    else
+        sb_free(&b);
+}
+
+static void parse_cdt(tv_demux *d, const uint8_t *s, int len)
+{
+    if (len < 17 || !(s[5] & 1) || !d->cb.on_event || s[10] != 0x01)  // data_type 1 = logo
+        return;
+    int onid = (s[8] << 8) | s[9];
+    int dl = ((s[11] & 0x0F) << 8) | s[12];
+    int m = 13 + dl;
+    if (m + 7 > len - 4)
+        return;
+    int type = s[m], logo_id = ((s[m + 1] & 1) << 8) | s[m + 2];
+    int version = ((s[m + 3] & 0x0F) << 8) | s[m + 4];
+    int size = (s[m + 5] << 8) | s[m + 6];
+    if (m + 7 + size > len - 4 || size < 8)
+        return;
+    uint64_t key = (0xC8ull << 56) | ((uint64_t)onid << 40) | ((uint64_t)type << 24) | ((uint64_t)logo_id << 8);
+    if (!eit_seen_update(d, key, version & 0xFF))
+        return;
+    sbuf b;
+    sb_init(&b);
+    sb_printf(&b, "{\"onid\":%d,\"id\":%d,\"type\":%d,\"ver\":%d,\"png\":", onid, logo_id, type, version);
+    sb_base64(&b, s + m + 7, (size_t)size);
+    sb_putc(&b, '}');
+    emit(d, TV_EV_LOGO, &b);
+}
+
+// BS and CS send their logos not in the CDT but in 全受信機共通データ (ARIB STD-B21 / TR-B15): data
+// carousels with component tag 0x79 or 0x7A in the engineering services, only at certain times. Each
+// module LOGO-0n (BS) or CS_LOGO-0n (CS) holds the logos of type n, each with the services that use
+// it, as LibISDB's LogoDownloaderFilter reads them.
+static bool pid_in(const int *list, int n, int pid)
+{
+    for (int i = 0; i < n; i++)
+        if (list[i] == pid)
+            return true;
+    return false;
+}
+
+static void free_logo_modules(tv_demux *d)
+{
+    for (int i = 0; i < d->nlogo_mods; i++) {
+        free(d->logo_mods[i].data);
+        free(d->logo_mods[i].have);
+    }
+    d->nlogo_mods = 0;
+}
+
+// The PMT PIDs of the engineering services in this TS (the SDT gives the service types).
+static void update_eng_pmts(tv_demux *d)
+{
+    d->neng_pmt = 0;
+    for (int i = 0; i < d->nprog && d->neng_pmt < MAX_PROGRAMS; i++)
+        if (d->prog[i].number != 0 && service_type_of(d, d->prog[i].number) == 0xA4)
+            d->eng_pmt[d->neng_pmt++] = d->prog[i].pmt_pid;
+}
+
+static void parse_eng_pmt(tv_demux *d, const uint8_t *s, int len)
+{
+    if (len < 16 || !(s[5] & 1))
+        return;
+    int i = 12 + (((s[10] & 0x0F) << 8) | s[11]);
+    while (i + 5 <= len - 4) {
+        int st = s[i], pid = ((s[i + 1] & 0x1F) << 8) | s[i + 2];
+        int eslen = ((s[i + 3] & 0x0F) << 8) | s[i + 4];
+        for (int j = i + 5; j + 3 <= i + 5 + eslen && j + 3 <= len - 4; j += 2 + s[j + 1]) {
+            if (st == 0x0D && s[j] == 0x52 && (s[j + 2] == 0x79 || s[j + 2] == 0x7A) &&
+                !pid_in(d->logo_pid, d->nlogo_pid, pid) && d->nlogo_pid < MAX_LOGO_PIDS)
+                d->logo_pid[d->nlogo_pid++] = pid;
+        }
+        i += 5 + eslen;
+    }
+}
+
+static void logo_module_complete(tv_demux *d, const logo_module *m, const uint8_t *p, uint32_t size)
+{
+    if (size < 3 || p[0] > 5 || !d->cb.on_event)
+        return;
+    int type = p[0], loops = (p[1] << 8) | p[2];
+    uint32_t pos = 3;
+    for (int l = 0; l < loops; l++) {
+        if (pos + 3 >= size)
+            return;
+        int logo_id = ((p[pos] & 1) << 8) | p[pos + 1];
+        int nsv = p[pos + 2];
+        pos += 3;
+        if (pos + 6u * nsv + 2 >= size)
+            return;
+        const uint8_t *sv = p + pos;
+        pos += 6u * nsv;
+        int dsize = (p[pos] << 8) | p[pos + 1];
+        pos += 2;
+        if (pos + dsize > size)
+            return;
+        if (nsv > 0 && dsize > 0) {
+            int onid = (sv[0] << 8) | sv[1], tsid = (sv[2] << 8) | sv[3];
+            sbuf b;
+            sb_init(&b);
+            sb_printf(&b, "{\"onid\":%d,\"tsid\":%d,\"services\":[", onid, tsid);
+            for (int k = 0; k < nsv; k++)
+                sb_printf(&b, "%s{\"onid\":%d,\"sid\":%d,\"logo\":%d}", k ? "," : "", (sv[6 * k] << 8) | sv[6 * k + 1],
+                          (sv[6 * k + 4] << 8) | sv[6 * k + 5], logo_id);
+            sb_puts(&b, "]}");
+            emit(d, TV_EV_SERVICE_LOGOS, &b);
+            sb_init(&b);
+            sb_printf(&b, "{\"onid\":%d,\"id\":%d,\"type\":%d,\"ver\":%d,\"png\":", onid, logo_id, type, m->version);
+            sb_base64(&b, p + pos, (size_t)dsize);
+            sb_putc(&b, '}');
+            emit(d, TV_EV_LOGO, &b);
+        }
+        pos += (uint32_t)dsize;
+    }
+}
+
+// DII: start assembling the logo modules it lists (again, when they have changed).
+static void logo_dii(tv_demux *d, int pid, const uint8_t *q, int n)
+{
+    if (n < 22)
+        return;
+    uint32_t dl = ((uint32_t)q[0] << 24) | ((uint32_t)q[1] << 16) | ((uint32_t)q[2] << 8) | q[3];
+    int bsize = (q[4] << 8) | q[5];
+    // downloadId, blockSize, windowSize, ackPeriod, tCDownloadWindow, tCDownloadScenario (16 bytes),
+    // then compatibilityDescriptor() with its length first
+    int i = 18 + ((q[16] << 8) | q[17]);
+    if (bsize <= 0 || i + 2 > n)
+        return;
+    int nmod = (q[i] << 8) | q[i + 1];
+    i += 2;
+    for (int k = 0; k < nmod && i + 8 <= n; k++) {
+        int mid = (q[i] << 8) | q[i + 1];
+        uint32_t size = ((uint32_t)q[i + 2] << 24) | ((uint32_t)q[i + 3] << 16) | ((uint32_t)q[i + 4] << 8) | q[i + 5];
+        int ver = q[i + 6], il = q[i + 7];
+        const uint8_t *info = q + i + 8;
+        i += 8 + il;
+        if (i > n)
+            break;
+        bool logo = false;
+        for (int j = 0; j + 2 <= il && j + 2 + info[j + 1] <= il; j += 2 + info[j + 1]) {
+            const uint8_t *name = info + j + 2;
+            int nl = info[j + 1];
+            if (info[j] == 0x02 && ((nl == 7 && !memcmp(name, "LOGO-0", 6)) || (nl == 10 && !memcmp(name, "CS_LOGO-0", 9))))
+                logo = true;
+        }
+        if (!logo || size == 0 || size > MAX_LOGO_MODULE_SIZE)
+            continue;
+        logo_module *m = NULL;
+        for (int j = 0; j < d->nlogo_mods; j++)
+            if (d->logo_mods[j].pid == pid && d->logo_mods[j].module_id == mid)
+                m = &d->logo_mods[j];
+        if (m && m->download_id == dl && m->version == ver && m->size == size && m->block_size == bsize)
+            continue;  // the same module, being assembled or done
+        if (!m) {
+            if (d->nlogo_mods >= MAX_LOGO_MODULES)
+                continue;
+            m = &d->logo_mods[d->nlogo_mods++];
+        } else {
+            free(m->data);
+            free(m->have);
+        }
+        memset(m, 0, sizeof(*m));
+        m->pid = pid;
+        m->download_id = dl;
+        m->module_id = mid;
+        m->version = ver;
+        m->size = size;
+        m->block_size = bsize;
+        m->nblocks = (int)((size + (uint32_t)bsize - 1) / (uint32_t)bsize);
+        m->data = malloc(size);
+        m->have = calloc((size_t)m->nblocks, 1);
+    }
+}
+
+// DDB: one block of a module.
+static void logo_ddb(tv_demux *d, int pid, uint32_t dl, const uint8_t *q, int n)
+{
+    if (n < 6)
+        return;
+    int mid = (q[0] << 8) | q[1], ver = q[2], bn = (q[4] << 8) | q[5];
+    for (int j = 0; j < d->nlogo_mods; j++) {
+        logo_module *m = &d->logo_mods[j];
+        if (m->pid != pid || m->module_id != mid || m->download_id != dl || m->version != ver || m->done)
+            continue;
+        if (bn >= m->nblocks || m->have[bn])
+            return;
+        uint32_t off = (uint32_t)bn * (uint32_t)m->block_size;
+        uint32_t len = (uint32_t)(n - 6);
+        if (off + len > m->size)
+            len = m->size - off;
+        memcpy(m->data + off, q + 6, len);
+        m->have[bn] = 1;
+        if (++m->got == m->nblocks) {
+            m->done = true;
+            logo_module_complete(d, m, m->data, m->size);
+            free(m->data);
+            free(m->have);
+            m->data = m->have = NULL;
+        }
+        return;
+    }
+}
+
+static void parse_logo_dsmcc(tv_demux *d, int pid, const uint8_t *s, int len)
+{
+    const uint8_t *p = s + 8;
+    int n = len - 8 - 4;
+    if (n < 12 || p[0] != 0x11 || p[1] != 0x03)
+        return;
+    int msg = (p[2] << 8) | p[3];
+    uint32_t id = ((uint32_t)p[4] << 24) | ((uint32_t)p[5] << 16) | ((uint32_t)p[6] << 8) | p[7];
+    int adapt = p[9];
+    if (12 + adapt > n)
+        return;
+    if (s[0] == 0x3B && msg == 0x1002)
+        logo_dii(d, pid, p + 12 + adapt, n - 12 - adapt);
+    else if (s[0] == 0x3C && msg == 0x1003)
+        logo_ddb(d, pid, id, p + 12 + adapt, n - 12 - adapt);
 }
 
 static void json_arib(sbuf *b, const char *key, const uint8_t *p, size_t n)
@@ -961,14 +1259,23 @@ static void handle_section(tv_demux *d, int pid, const uint8_t *s, int len)
         parse_pat(d, s, len);
     else if (pid == d->pmt_pid && tid == 0x02)
         parse_pmt(d, s, len);
-    else if (pid == 0x11 && tid == 0x42)
-        parse_sdt(d, s, len);
-    else if (pid == 0x10 && tid == 0x40)
+    else if (pid == 0x11 && (tid == 0x42 || tid == 0x46)) {
+        if (tid == 0x42)
+            parse_sdt(d, s, len);
+        parse_sdt_logos(d, s, len);
+    } else if (pid == 0x10 && tid == 0x40)
         parse_nit(d, s, len);
     else if (pid == 0x12 && tid >= 0x4E && tid <= 0x6F)
         parse_eit(d, s, len);
     else if (pid == 0x14)
         parse_tot(d, s, len);
+    else if (pid == 0x29 && tid == 0xC8)
+        parse_cdt(d, s, len);
+    else if ((tid == 0x3B || tid == 0x3C) && pid_in(d->logo_pid, d->nlogo_pid, pid))
+        parse_logo_dsmcc(d, pid, s, len);
+    // Also when it is the selected service's PMT: an engineering service can be selected.
+    if (tid == 0x02 && pid_in(d->eng_pmt, d->neng_pmt, pid))
+        parse_eng_pmt(d, s, len);
 }
 
 static void section_process(tv_demux *d, int pid, section_buf *sb)
@@ -1236,7 +1543,8 @@ static void handle_packet(tv_demux *d, const uint8_t *p)
         feed_pes(d, &d->caption, PES_CAPTION, pusi, pl, n);
     else if (pid == d->superimpose.pid)
         feed_pes(d, &d->superimpose, PES_SUPERIMPOSE, pusi, pl, n);
-    else if (pid == 0x00 || pid == d->pmt_pid || pid == 0x10 || pid == 0x11 || pid == 0x12 || pid == 0x14)
+    else if (pid == 0x00 || pid == d->pmt_pid || pid == 0x10 || pid == 0x11 || pid == 0x12 || pid == 0x14 ||
+             pid == 0x29 || pid_in(d->eng_pmt, d->neng_pmt, pid) || pid_in(d->logo_pid, d->nlogo_pid, pid))
         feed_section(d, pid, pusi, pl, n);
 }
 

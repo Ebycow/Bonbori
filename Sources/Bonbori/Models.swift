@@ -24,6 +24,49 @@ struct Channel: Codable, Hashable {
         if spaceName.uppercased().hasPrefix("BS") { return .bs }
         return .cs
     }
+
+    /// Terrestrial partial reception (ワンセグ): bits 7–8 of the service id are the service kind,
+    /// and 3 is partial reception (ARIB TR-B14). Its service_type is 0xC0 like a data service.
+    var isOneSeg: Bool { kind == .terrestrial && (sid >> 7) & 3 == 3 }
+
+    /// Some services have a blank name (BS 744 etc.). Some use U+2212 for a hyphen (as in TVTest,
+    /// shown as U+FF0D).
+    var displayName: String {
+        let n = name.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\u{2212}", with: "\u{FF0D}")
+        return n.isEmpty ? "SID \(sid)" : n
+    }
+
+    /// A service named only a hyphen: probably a closed one (TVTest leaves these off by default).
+    var isPlaceholder: Bool {
+        let n = name.trimmingCharacters(in: .whitespaces)
+        return !n.isEmpty && n.allSatisfy { "-\u{2212}\u{FF0D}\u{2010}\u{2015}".contains($0) }
+    }
+
+    /// ARIB STD-B10 service_type.
+    var serviceTypeName: String {
+        switch serviceType {
+        case 0x01: return "テレビ"
+        case 0x02: return "ラジオ"
+        case 0xA1: return "臨時映像"
+        case 0xA2: return "臨時音声"
+        case 0xA3: return "臨時データ"
+        case 0xA4: return "エンジニアリング"
+        case 0xA5: return "プロモーション映像"
+        case 0xA6: return "プロモーション音声"
+        case 0xA7: return "プロモーションデータ"
+        case 0xA8: return "事前蓄積用データ"
+        case 0xA9: return "蓄積専用データ"
+        case 0xAA: return "ブックマーク一覧データ"
+        case 0xAB: return "サーバー型サイマル"
+        case 0xAC: return "独立ファイル"
+        case 0xAD: return "超高精細度4K"
+        case 0xC0: return "データ"
+        default: return String(format: "種別 0x%02X", serviceType)
+        }
+    }
+
+    /// Services with neither picture nor sound, per service_type.
+    var isDataOnly: Bool { [0xA3, 0xA4, 0xA7, 0xA8, 0xA9, 0xAA, 0xAC, 0xC0].contains(serviceType) && !isOneSeg }
 }
 
 enum SpaceKind: Int, CaseIterable {
@@ -80,6 +123,8 @@ struct StreamEvent: Decodable {
     let audio: String
     let audio_count: Int
     let audio_index: Int
+    /// The PMT's components: [PID, stream_type, component_tag (-1 = none)].
+    let es: [[Int]]?
 }
 
 struct FormatEvent: Decodable {
@@ -191,6 +236,11 @@ final class Settings {
         get { d.bool(forKey: "showSubChannels") }
         set { d.set(newValue, forKey: "showSubChannels") }
     }
+    /// List data, temporary and engineering services in the channel list and the menus.
+    var showOtherServices: Bool {
+        get { d.object(forKey: "showOtherServices") == nil ? true : d.bool(forKey: "showOtherServices") }
+        set { d.set(newValue, forKey: "showOtherServices") }
+    }
     /// Ask BonDriverProxyEx to descramble on the server (eDesireToUseB25).
     var serverB25: Bool {
         get { d.object(forKey: "serverB25") == nil ? true : d.bool(forKey: "serverB25") }
@@ -238,7 +288,7 @@ final class ChannelStore {
     /// terrestrial/BS TS is the main channel; CS transponders carry independent channels).
     var tvChannels: [Channel] {
         // Match TVTest's default scan sort: terrestrial remote-control key, BS/CS service ID.
-        let tv = channels.filter(ChannelStore.isTV).sorted { a, b in
+        let tv = channels.filter { ChannelStore.isTV($0) && !$0.isPlaceholder }.sorted { a, b in
             if a.kind != b.kind { return a.kind.rawValue < b.kind.rawValue }
             if a.kind == .terrestrial && a.remoteKey != b.remoteKey {
                 return a.remoteKey < b.remoteKey
@@ -258,6 +308,15 @@ final class ChannelStore {
 
     func channels(of kind: SpaceKind) -> [Channel] {
         tvChannels.filter { $0.kind == kind }
+    }
+
+    /// Everything else of a kind (data, temporary and engineering services, radio...), for the
+    /// channel list and the menus but not for zapping, and TV services that look closed (named "-").
+    /// One-seg is left out (#8).
+    func otherServices(of kind: SpaceKind) -> [Channel] {
+        guard Settings.shared.showOtherServices else { return [] }
+        return channels.filter { $0.kind == kind && (!ChannelStore.isTV($0) || $0.isPlaceholder) && !$0.isOneSeg }
+            .sorted { ($0.tsid, $0.sid) < ($1.tsid, $1.sid) }
     }
 
     func find(id: String) -> Channel? { channels.first { $0.id == id } }

@@ -410,6 +410,15 @@ final class ChannelHeaderView: NSView {
 
     override var isFlipped: Bool { true }
 
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        NotificationCenter.default.addObserver(self, selector: #selector(logosChanged), name: .logosChanged, object: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func logosChanged() { needsDisplay = true }
+
     override func draw(_ dirty: NSRect) {
         NSColor.windowBackgroundColor.setFill()
         bounds.intersection(dirty).fill()
@@ -424,8 +433,10 @@ final class ChannelHeaderView: NSView {
                 NSColor.controlAccentColor.withAlphaComponent(0.15).setFill()
                 r.fill()
             }
+            // The logo (when one has been received) goes before the name.
+            let logo = LogoStore.shared.image(for: col.channel).flatMap { $0.size.height > 0 ? $0 : nil }
             let p = NSMutableParagraphStyle()
-            p.alignment = .center
+            p.alignment = logo == nil ? .center : .left
             p.lineBreakMode = .byTruncatingTail
             let key = col.channel.remoteKey > 0 ? "\(col.channel.remoteKey)  " : ""
             let s = NSMutableAttributedString(string: key, attributes: [
@@ -438,9 +449,17 @@ final class ChannelHeaderView: NSView {
                 .foregroundColor: current ? NSColor.controlAccentColor : NSColor.labelColor,
                 .paragraphStyle: p,
             ]))
-            let h = s.boundingRect(with: NSSize(width: r.width - 8, height: 100), options: .usesLineFragmentOrigin).height
-            s.draw(with: NSRect(x: r.minX + 4, y: (bounds.height - min(h, 16)) / 2, width: r.width - 8, height: 16),
-                   options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            var text = NSRect(x: r.minX + 4, y: 0, width: r.width - 8, height: 16)
+            if let logo {
+                let lh: CGFloat = 18, lw = min(lh * logo.size.width / logo.size.height, 40)
+                logo.draw(in: NSRect(x: r.minX + 6, y: (bounds.height - lh) / 2, width: lw, height: lh),
+                          from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+                text.origin.x += lw + 4
+                text.size.width -= lw + 4
+            }
+            let h = s.boundingRect(with: NSSize(width: text.width, height: 100), options: .usesLineFragmentOrigin).height
+            text.origin.y = (bounds.height - min(h, 16)) / 2
+            s.draw(with: text, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
             NSColor.separatorColor.setFill()
             NSRect(x: r.maxX - hair, y: 6, width: hair, height: bounds.height - 12).fill()
         }
