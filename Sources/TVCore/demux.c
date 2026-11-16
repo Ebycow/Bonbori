@@ -344,7 +344,10 @@ static void emit_stream(tv_demux *d)
     sb_json_str(&b, vst >= 0 ? stream_type_name(vst) : "");
     sb_puts(&b, ",\"audio\":");
     sb_json_str(&b, ast >= 0 ? stream_type_name(ast) : "");
-    sb_printf(&b, ",\"audio_count\":%d,\"audio_index\":%d}", naudio, d->audio_index);
+    sb_printf(&b, ",\"audio_count\":%d,\"audio_index\":%d,\"es\":[", naudio, d->audio_index);
+    for (int i = 0; i < d->nes; i++)
+        sb_printf(&b, "%s[%d,%d,%d]", i ? "," : "", d->es[i].pid, d->es[i].stream_type, d->es[i].component_tag);
+    sb_puts(&b, "]}");
     emit(d, TV_EV_STREAM, &b);
 }
 
@@ -450,7 +453,8 @@ static void replay_ring(tv_demux *d)
     }
 }
 
-static void apply_es_selection(tv_demux *d)
+// Returns whether the video or audio ES changed (TV_EV_STREAM is then sent).
+static bool apply_es_selection(tv_demux *d)
 {
     int vpid = -1, vst = -1, apid = -1, ast = -1, ai = 0, cpid = -1, spid = -1;
     for (int i = 0; i < d->nes; i++) {
@@ -496,6 +500,7 @@ static void apply_es_selection(tv_demux *d)
         emit_stream(d);
         replay_ring(d);
     }
+    return changed;
 }
 
 void tv_demux_select_audio(tv_demux *d, int index)
@@ -572,7 +577,9 @@ static void parse_pmt(tv_demux *d, const uint8_t *s, int len)
         d->nes++;
         i += 5 + eslen;
     }
-    apply_es_selection(d);
+    // A service without picture and sound (data, engineering) changes neither: report it anyway.
+    if (!apply_es_selection(d))
+        emit_stream(d);
 }
 
 static void parse_sdt(tv_demux *d, const uint8_t *s, int len)
