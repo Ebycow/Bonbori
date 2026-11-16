@@ -22,6 +22,7 @@ void sb_putc(sbuf *b, char c);
 void sb_puts(sbuf *b, const char *s);
 void sb_printf(sbuf *b, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void sb_json_str(sbuf *b, const char *s);  // writes a quoted, escaped JSON string
+void sb_base64(sbuf *b, const uint8_t *p, size_t n);  // writes `p` as a quoted base64 JSON string
 
 uint32_t crc32_mpeg(const uint8_t *p, size_t n);
 int64_t now_ms(void);

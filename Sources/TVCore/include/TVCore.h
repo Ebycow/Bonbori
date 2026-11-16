@@ -30,6 +30,14 @@ typedef enum {
     //  "events":[{"id","start","dur","ca","title","text","genre":[],"ext":[[item,text]],
     //             "group":[[sid,eid]],"video","audio":[]}]}  (optional keys omitted when absent)
     TV_EV_EIT      = 10,
+    // JSON: the logo ids of services, from an SDT section (actual or other TS, once per section
+    // version per tune) or a 全受信機共通データ logo module (BS/CS, whose services carry their own
+    // "onid"): {"onid","tsid","services":[{"onid"?,"sid","logo"}]}
+    TV_EV_SERVICE_LOGOS = 11,
+    // JSON: one logo from the CDT (terrestrial; once per logo version per tune) or a 全受信機共通データ
+    // logo module (BS/CS; "ver" is the module version). The PNG is as broadcast: indexed
+    // colour without a palette (it uses the ARIB default CLUT). {"onid","id","type","ver","png":base64}
+    TV_EV_LOGO     = 12,
 } tv_event_type;
 
 typedef struct {

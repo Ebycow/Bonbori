@@ -87,6 +87,24 @@ void sb_json_str(sbuf *b, const char *s)
     sb_putc(b, '"');
 }
 
+void sb_base64(sbuf *b, const uint8_t *p, size_t n)
+{
+    static const char tbl[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    sb_putc(b, '"');
+    for (size_t i = 0; i < n; i += 3) {
+        uint32_t v = (uint32_t)p[i] << 16;
+        if (i + 1 < n)
+            v |= (uint32_t)p[i + 1] << 8;
+        if (i + 2 < n)
+            v |= p[i + 2];
+        sb_putc(b, tbl[(v >> 18) & 63]);
+        sb_putc(b, tbl[(v >> 12) & 63]);
+        sb_putc(b, i + 1 < n ? tbl[(v >> 6) & 63] : '=');
+        sb_putc(b, i + 2 < n ? tbl[v & 63] : '=');
+    }
+    sb_putc(b, '"');
+}
+
 static uint32_t crc_table[256];
 static pthread_once_t crc_once = PTHREAD_ONCE_INIT;
 
