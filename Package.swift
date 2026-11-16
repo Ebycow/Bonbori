@@ -73,6 +73,12 @@ let package = Package(
             path: "Sources/Plugins/DataBroadcasting"
         ),
         .testTarget(
+            name: "JikkyoTests",
+            dependencies: ["Jikkyo"],
+            path: "Tests/JikkyoTests",
+            swiftSettings: testingMacros
+        ),
+        .testTarget(
             name: "CaptionsTests",
             dependencies: ["Captions"],
             path: "Tests/CaptionsTests",

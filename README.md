@@ -107,13 +107,15 @@ Touch Bar のある Mac では、Touch Bar に地デジ / BS / CS の切り替�
 
 `J`（またはメニュー「プラグイン」）で、見ているチャンネルの実況コメントを映像の上に流します（初期状態はオフ）。[NicoJK](https://github.com/xtne6f/NicoJK) の機能を参考に、プラグインとして作り直したものです。
 
-- コメントは [NX-Jikkyo](https://nx-jikkyo.tsukumijima.net/) から受信します。公式のニコニコ実況のコメントも転送されているので、この 1 か所の接続で両方が流れます。地デジ・BS・CS の 33 チャンネルに対応しています。チャンネルは放送のサービス ID から自動で判定します
+- コメントの受信元は、メニュー「プラグイン」の「受信元」で選びます。チャンネルは放送のサービス ID から自動で判定します
+  - **NX-Jikkyo**（初期状態）: [NX-Jikkyo](https://nx-jikkyo.tsukumijima.net/) から受信します。公式のニコニコ実況のコメントも転送されているので、この 1 か所の接続で両方が流れます。地デジ・BS・CS の 33 チャンネルに対応しています
+  - **ニコニコ実況（公式）**: ニコニコ生放送の実況チャンネルから直接受信します（ログインはしません）。NX-Jikkyo につながらないときに使えます。公式にあるのは NHK総合・Eテレ・日テレ・テレ朝・TBS・テレ東・フジ・TOKYO MX・NHK BS・BS11 の 10 チャンネルだけで、NX-Jikkyo だけに投稿されたコメントは流れません
 - 表示: 流れるコメント、上・下の固定コメント、色、大きさの指定に対応します。文字の大きさと不透明度はメニュー「プラグイン」で変えられます
 - 「映像を遅らせて字幕に合わせる」を使っているときは、コメントも同じ秒数だけ遅らせます
 - `P` のキャプチャにはコメントも写ります
 - コメントの投稿、過去ログ、録画への同期再生には対応していません
 
-非公式の API を使っているため、サーバーの仕様変更で動かなくなることがあります。有志が運営するサーバーなので、接続は次のように控えめにしています:
+どちらも非公式の方法で受信しているため、サーバーの仕様変更で動かなくなることがあります。サーバーに負荷をかけないよう、接続は次のように控えめにしています:
 
 - オフの間、チャンネルに対応する実況がない間、チャンネルスキャンと番組表の取得の間は接続しません
 - 同じチャンネルに 3 秒とどまってから接続します。ザッピング中は接続しません
@@ -178,7 +180,9 @@ Sources/Bonbori (Swift/AppKit)
 Sources/BonboriPluginKit    プラグインから見える API（BonboriPlugin / PluginHost）
 Sources/Plugins/Jikkyo      ニコニコ実況
   JikkyoPlugin.swift        いつ接続するかの判断、メニュー
-  CommentClient.swift       NX-Jikkyo との通信（URLSession の WebSocket）
+  CommentConnection.swift   受信元の種類と、接続に共通のインターフェース
+  NXJikkyoClient.swift      NX-Jikkyo との通信（URLSession の WebSocket）
+  NiconicoClient.swift      ニコニコ生放送との通信（視聴ページ → 視聴セッションの WebSocket → protobuf のコメントストリーム）
   CommentOverlay.swift      弾幕の表示（Core Text で描いた画像を Core Animation で動かす）
   Comment.swift             コメントの表示コマンドの解釈
   ChannelTable.swift        放送サービスから実況番号への対応表（生成）
@@ -282,8 +286,8 @@ log show --last 1d --predicate 'subsystem == "net.ebycow.bonbori"'
 - [web-bml](https://github.com/otya128/web-bml)（otya, MIT License）: データ放送の BML の表示はこれが行います。ビルド時に取得し、アプリに同梱します。
 - [web-bml-fonts](https://www.npmjs.com/package/web-bml-fonts)（Kosugi / Kosugi Maru, Apache License 2.0）: データ放送の表示に使うフォントです。ビルド時に取得し、アプリに同梱します。
 - [FFmpeg](https://ffmpeg.org/): 映像・音声のデコードとインタレース解除に使っています。
-- [NicoJK](https://github.com/rutice/NicoJK)（rutice）と、そのフォークの [xtne6f/NicoJK](https://github.com/xtne6f/NicoJK)（xtne6f）: ニコニコ実況の表示の動作（行数と表示時間、コメントの配置、色の指定）を参考にしています。放送サービスと実況チャンネルの対応表は同梱の `jkch.sh.txt` から生成しています。
-- [jkcnsl](https://github.com/xtne6f/jkcnsl)（xtne6f, MIT License）: NX-Jikkyo との通信手順を参考にしています。
+- [NicoJK](https://github.com/rutice/NicoJK)（rutice）と、そのフォークの [xtne6f/NicoJK](https://github.com/xtne6f/NicoJK)（xtne6f）: ニコニコ実況の表示の動作（行数と表示時間、コメントの配置、色の指定）を参考にしています。放送サービスと実況チャンネルの対応表は同梱の `jkch.sh.txt` から生成し、公式の実況チャンネルの ID は `JKIDNameTable.h` によります。
+- [jkcnsl](https://github.com/xtne6f/jkcnsl)（xtne6f, MIT License）: NX-Jikkyo およびニコニコ生放送との通信手順（視聴セッション、コメントの protobuf の読み方）を参考にしています。
 - [NX-Jikkyo](https://github.com/tsukumijima/NX-Jikkyo)（tsukumijima, MIT License）: 実況コメントの受信に利用しています。
 - [TVCaptionMod2](https://github.com/xtne6f/TVCaptionMod2)（xtne6f）と、その元になった odaru 氏の「字幕 Plugin For TVTest」、mark10als 氏・maki 氏の Caption2Ass_PCR 付属の Caption.dll 改造版: 字幕と文字スーパーの解釈と表示の動作を参考にしています。ARIB の色、追加記号の Unicode 対応表、DRCS の置き換え表は同梱の `ColorDef.h`、`GaijiTable.h`、`TVCaptionMod2_Gaiji_std.txt` から生成しています。内蔵音は同梱の `src/rom` をビルド時に取り込みます（速報チャイム1は xtne6f 氏の自作、ほかは[小森平氏のフリー効果音](https://taira-komori.jpn.org/)を加工・調整したもの。規約はアプリ内の `CaptionSounds/readme.txt` に引用されています）。
 - ARIB STD-B10 / STD-B24 / TR-B14 などの規格。

@@ -6,23 +6,13 @@ import Foundation
 ///
 /// NX-Jikkyo is run by volunteers, so this asks for no more than it shows: no posting rights and
 /// no past comments. Use it once; JikkyoPlugin decides when to connect.
-final class CommentClient {
-    enum Event {
-        case comment(Comment)
-        case viewers(Int)
-        /// The connection is over, for whatever reason.
-        case ended(String)
-    }
-
-    /// Main thread. Nothing arrives after close().
-    var onEvent: ((Event) -> Void)?
+final class NXJikkyoClient: CommentConnection {
+    var onEvent: ((CommentEvent) -> Void)?
 
     private let session = URLSession(configuration: .ephemeral)
     private let log: (String) -> Void
     private let lock = NSLock()
     private var sockets: [URLSessionWebSocketTask] = []
-
-    private static let userAgent = "Bonbori (macOS; +https://github.com/Ebycow/Bonbori)"
 
     private struct Ended: Error { let reason: String }
 
@@ -88,13 +78,13 @@ final class CommentClient {
         open.forEach { $0.cancel(with: .normalClosure, reason: nil) }
     }
 
-    private func send(_ event: Event) {
+    private func send(_ event: CommentEvent) {
         DispatchQueue.main.async { [weak self] in self?.onEvent?(event) }
     }
 
     private func socket(_ url: URL) -> URLSessionWebSocketTask {
         var request = URLRequest(url: url)
-        request.setValue(CommentClient.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(commentUserAgent, forHTTPHeaderField: "User-Agent")
         let s = session.webSocketTask(with: request)
         lock.withLock { sockets.append(s) }
         s.resume()
