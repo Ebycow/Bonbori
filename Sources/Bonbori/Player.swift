@@ -424,6 +424,10 @@ final class Player {
             EPGStore.shared.ingest(json)
             return
         }
+        if type == Int32(TV_EV_LOGO.rawValue) || type == Int32(TV_EV_SERVICE_LOGOS.rawValue) {
+            LogoStore.shared.ingest(type: type, json: json)
+            return
+        }
         // With an output delay the new channel's first data arrives late: clear the old picture now.
         if type == Int32(TV_EV_TUNED.rawValue), outputDelay > 0, let t = decode(TunedEvent.self, json), t.ok {
             media.async { _ = self.accept(UInt32(t.gen)) }

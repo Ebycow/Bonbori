@@ -21,6 +21,8 @@ final class ChannelListPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegat
         }
     }
 
+    private static let logoSize = NSSize(width: 32, height: 18)
+
     init(controller: MainController) {
         self.controller = controller
         super.init(contentRect: NSRect(x: 0, y: 0, width: 300, height: 560),
@@ -46,6 +48,11 @@ final class ChannelListPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegat
         scroll.hasVerticalScroller = true
         contentView = scroll
         reload()
+        NotificationCenter.default.addObserver(self, selector: #selector(logosChanged), name: .logosChanged, object: nil)
+    }
+
+    @objc private func logosChanged() {
+        if isVisible { table.reloadData() }
     }
 
     func show(relativeTo w: NSWindow) {
@@ -93,16 +100,20 @@ final class ChannelListPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegat
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let tf = NSTextField(labelWithString: "")
         tf.lineBreakMode = .byTruncatingTail
+        let c: Channel
         switch rows[row] {
         case .header(let t):
             tf.stringValue = t
             tf.font = .boldSystemFont(ofSize: 12)
-        case .channel(let c):
+            return tf
+        case .channel(let ch):
+            c = ch
             let key = c.remoteKey > 0 ? String(format: "%2d", c.remoteKey) : "  "
             tf.stringValue = "\(key)  \(c.displayName)"
             tf.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
             tf.toolTip = "\(c.spaceName) \(c.channelName)  SID \(c.sid)  \(c.tsName)"
-        case .other(let c):
+        case .other(let ch):
+            c = ch
             let s = NSMutableAttributedString(string: c.displayName, attributes: [.font: NSFont.systemFont(ofSize: 13)])
             s.append(NSAttributedString(string: "  \(c.serviceTypeName)", attributes: [
                 .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor,
@@ -111,7 +122,17 @@ final class ChannelListPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegat
             tf.toolTip = String(format: "%@ %@  SID %d  service_type 0x%02X  %@", c.spaceName, c.channelName, c.sid,
                                 c.serviceType, c.tsName)
         }
-        return tf
+        let logo = NSImageView()
+        logo.image = LogoStore.shared.image(for: c)
+        logo.imageScaling = .scaleProportionallyUpOrDown
+        logo.translatesAutoresizingMaskIntoConstraints = false
+        logo.widthAnchor.constraint(equalToConstant: ChannelListPanel.logoSize.width).isActive = true
+        logo.heightAnchor.constraint(equalToConstant: ChannelListPanel.logoSize.height).isActive = true
+        let stack = NSStackView(views: [logo, tf])
+        stack.spacing = 6
+        stack.alignment = .centerY
+        tf.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return stack
     }
 
     @objc private func activate(_ sender: Any?) {
