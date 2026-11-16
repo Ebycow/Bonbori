@@ -15,6 +15,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         m.tuneService = { [unowned self] in tuneService(networkID: $0, transportStreamID: $1, serviceID: $2) }
         m.tuneRemoteKey = { [unowned self] in tuneKey($0) }
         m.touchBarChanged = { [unowned self] in rebuildTouchBar() }
+        m.activeChanged = { [unowned self] in updateNoPictureMessage() }
         return m
     }()
     private lazy var touchBar = MainTouchBar(controller: self)
@@ -46,6 +47,10 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     private var audioIndex = 0
     private var lastByKind: [SpaceKind: String] = [:]
     private var scrambleWarned = false
+    /// The center message says that the service has no picture, or is off the air.
+    private var noPictureMessage = false
+    /// The service is not in the PAT (a temporary service that is off the air) and has been reported.
+    private var offAirWarned = false
     private var scanning = false
     private var lastTuneAt = Date()
     private var errorTimer: Timer?
@@ -134,6 +139,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         program = nil
         stream = nil
         scrambleWarned = false
+        noPictureMessage = false
+        offAirWarned = false
         lastTuneAt = Date()
         // Data and engineering services are visited, not returned to on launch or with T / B / C.
         if remember && ChannelStore.isTV(ch) && !ch.isPlaceholder {
@@ -228,6 +235,17 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         case TV_EV_STREAM.rawValue:
             stream = decode(StreamEvent.self, json)
             updateInfo()
+            updateNoPictureMessage()
+        case TV_EV_SERVICES.rawValue:
+            // A temporary or promotional service that is off the air is not in the PAT; the demuxer
+            // then waits for it.
+            guard let ev = decode(ServicesEvent.self, json), ev.complete, !offAirWarned, !scanning,
+                  !epgCapture.isRunning, let ch = current, ev.tsid == ch.tsid, !ev.pat.isEmpty,
+                  !ev.pat.contains(ch.sid) else { return }
+            offAirWarned = true
+            // Stays until the service starts (its PMT then brings TV_EV_STREAM).
+            videoView.setCenterMessage("\(ch.displayName)（SID \(ch.sid)）は現在放送されていません\nPAT にこのサービスがありません。放送が始まると映ります")
+            noPictureMessage = true
         case TV_EV_FORMAT.rawValue:
             guard let f = decode(FormatEvent.self, json) else { return }
             if f.kind == "video" {
@@ -313,7 +331,40 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             fmt.append(s)
         }
         if !fmt.isEmpty { parts.append(fmt.joined(separator: " / ")) }
+        if let es = stream?.es, !es.isEmpty, stream?.sid == current?.sid {
+            // PID:stream_type/component_tag, as in a PMT dump
+            let items = es.map { e -> String in
+                let tag = e.count > 2 && e[2] >= 0 ? String(format: "/%02X", e[2]) : ""
+                return String(format: "%04X:%02X", e[0], e.count > 1 ? e[1] : 0) + tag
+            }
+            for i in stride(from: 0, to: items.count, by: 6) {
+                parts.append((i == 0 ? "ES " : "   ") + items[i..<min(i + 6, items.count)].joined(separator: "  "))
+            }
+        }
         videoView.setInfo(parts.joined(separator: "\n"))
+    }
+
+    /// A service without picture (data, engineering, radio) would leave a black screen: say what
+    /// it is. Not while the data broadcast is on, which shows the service's document instead.
+    private func updateNoPictureMessage() {
+        guard let ch = current, let st = stream, st.sid == ch.sid else { return }
+        var text: String?
+        if st.video.isEmpty && !scrambleWarned {
+            if !st.audio.isEmpty {
+                text = "\(ch.displayName)\n音声だけのサービスです"
+            } else if ch.serviceType == 0xA4 {
+                text = "\(ch.displayName)\nエンジニアリングサービスです（受信機向けのダウンロードなど。映像と音声はありません）\nI キーで PMT の構成を表示します"
+            } else if !plugins.isActive("databroadcasting") {
+                text = "\(ch.displayName)\n\(ch.serviceTypeName)サービスです（映像と音声はありません）\nG キーでデータ放送を表示し、I キーで PMT の構成を表示します"
+            }
+        }
+        if let text {
+            videoView.setCenterMessage(text)
+            noPictureMessage = true
+        } else if noPictureMessage {
+            videoView.setCenterMessage(nil)
+            noPictureMessage = false
+        }
     }
 
     // MARK: - Input

@@ -123,6 +123,8 @@ struct StreamEvent: Decodable {
     let audio: String
     let audio_count: Int
     let audio_index: Int
+    /// The PMT's components: [PID, stream_type, component_tag (-1 = none)].
+    let es: [[Int]]?
 }
 
 struct FormatEvent: Decodable {

@@ -15,6 +15,8 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
     var tuneRemoteKey: (Int) -> Void = { _ in }
     /// The plugins' Touch Bar items may have changed.
     var touchBarChanged: () -> Void = {}
+    /// A plugin has been turned on or off.
+    var activeChanged: () -> Void = {}
 
     private let player: Player
     private let videoView: VideoView
@@ -120,7 +122,10 @@ final class PluginManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
         s.isActive = on
         if on { s.plugin.activate() } else { s.plugin.deactivate() }
         touchBarChanged()
+        activeChanged()
     }
+
+    func isActive(_ id: String) -> Bool { slots.contains { $0.info.id == id && $0.isActive } }
 
     private func toggle(_ s: Slot) {
         s.isEnabled.toggle()
