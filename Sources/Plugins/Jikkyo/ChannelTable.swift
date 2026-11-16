@@ -14,6 +14,15 @@ enum ChannelTable {
         return byNetworkService[networkID << 16 | serviceID]
     }
 
+    /// The ニコニコ生放送 channel of a 実況 channel, for those ニコニコ実況 itself has (from the
+    /// table in NicoJK's JKIDNameTable.h).
+    static func niconicoChannel(jikkyoID: Int) -> String? { niconico[jikkyoID] }
+
+    private static let niconico: [Int: String] = [
+        1: "ch2646436", 2: "ch2646437", 4: "ch2646438", 5: "ch2646439", 6: "ch2646440", 7: "ch2646441",
+        8: "ch2646442", 9: "ch2646485", 101: "ch2647992", 211: "ch2646846",
+    ]
+
     private static let byTerrestrial = invert(terrestrial)
     private static let byNetworkService = invert(satellite)
 

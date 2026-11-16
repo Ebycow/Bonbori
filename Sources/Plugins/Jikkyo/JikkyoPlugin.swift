@@ -24,7 +24,7 @@ public final class JikkyoPlugin: NSObject, BonboriPlugin {
     private lazy var overlay = CommentOverlay(frame: .zero)
     private var isActive = false
 
-    private var client: CommentClient?
+    private var client: CommentConnection?
     private var clientChannel: Int?
     private var connectedAt = Date.distantPast
     private var viewers: Int?
@@ -44,7 +44,7 @@ public final class JikkyoPlugin: NSObject, BonboriPlugin {
         isActive = true
         applyDisplaySettings()
         host.addOverlay(overlay)
-        if host.service != nil && channel == nil { host.showMessage("このチャンネルの実況はありません", detail: nil) }
+        if host.service != nil, let text = unavailableText { host.showMessage(text, detail: nil) }
         update(settle: 0)
     }
 
@@ -86,9 +86,22 @@ public final class JikkyoPlugin: NSObject, BonboriPlugin {
         host.service.flatMap { ChannelTable.jikkyoID(networkID: $0.networkID, serviceID: $0.serviceID) }
     }
 
+    /// Where the comments come from.
+    private var source: CommentSource {
+        get { host.defaults.string(forKey: "source").flatMap(CommentSource.init) ?? .nxJikkyo }
+        set { host.defaults.set(newValue.rawValue, forKey: "source") }
+    }
+
+    /// Why there are no comments for the channel being watched, if so.
+    private var unavailableText: String? {
+        guard let channel else { return "このチャンネルの実況はありません" }
+        return source.hasChannel(channel) ? nil : "このチャンネルの実況は\(source.title)にありません"
+    }
+
     /// Where we should be connected now.
     private var wantedChannel: Int? {
-        isActive && !hiddenTooLong ? channel : nil
+        guard isActive, !hiddenTooLong, let channel, source.hasChannel(channel) else { return nil }
+        return channel
     }
 
     /// Brings the connection in line with `wantedChannel`, after staying `settle` seconds on it.
@@ -103,15 +116,14 @@ public final class JikkyoPlugin: NSObject, BonboriPlugin {
 
     private func connect() {
         guard client == nil, let channel = wantedChannel else { return }
-        host.log("connecting to jk\(channel)")
+        host.log("connecting to jk\(channel) (\(source.rawValue))")
         lastAttempt = Date()
-        let c = CommentClient { [weak host] in host?.log($0) }
+        guard let c = source.connect(jikkyoID: channel, log: { [weak host] in host?.log($0) }) else { return }
         c.onEvent = { [weak self] in self?.received($0) }
         client = c
         clientChannel = channel
         connectedAt = Date()
         viewers = nil
-        c.connect(jikkyoID: channel)
     }
 
     private func closeClient() {
@@ -122,7 +134,7 @@ public final class JikkyoPlugin: NSObject, BonboriPlugin {
         viewers = nil
     }
 
-    private func received(_ event: CommentClient.Event) {
+    private func received(_ event: CommentEvent) {
         switch event {
         case .comment(let comment):
             if host.isVideoVisible { overlay.add(comment, delay: host.playbackDelay) }
@@ -143,7 +155,7 @@ public final class JikkyoPlugin: NSObject, BonboriPlugin {
 
     private var statusText: String {
         if host.service == nil { return "選局していません" }
-        guard let channel else { return "このチャンネルの実況はありません" }
+        guard let channel, unavailableText == nil else { return unavailableText ?? "" }
         if client == nil { return isActive ? "jk\(channel) 接続待ち" : "jk\(channel)" }
         return viewers.map { "jk\(channel) 接続中  \($0) 人" } ?? "jk\(channel) 接続しています…"
     }
@@ -160,10 +172,17 @@ public final class JikkyoPlugin: NSObject, BonboriPlugin {
         opacity.indentationLevel = 1
         opacity.submenu = choices([("100%", 100), ("75%", 75), ("50%", 50)], current: opacityPercent, action: #selector(setOpacity(_:)))
 
-        let credit = NSMenuItem(title: "NX-Jikkyo 経由で受信しています", action: nil, keyEquivalent: "")
-        credit.isEnabled = false
-        credit.indentationLevel = 1
-        return [status, size, opacity, credit]
+        let from = NSMenuItem(title: "受信元", action: nil, keyEquivalent: "")
+        from.indentationLevel = 1
+        let sources = NSMenu()
+        for (i, s) in CommentSource.allCases.enumerated() {
+            let item = sources.addItem(withTitle: s.title, action: #selector(setSource(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = i
+            item.state = s == source ? .on : .off
+        }
+        from.submenu = sources
+        return [status, from, size, opacity]
     }
 
     private func choices(_ list: [(String, Int)], current: Int, action: Selector) -> NSMenu {
@@ -185,6 +204,20 @@ public final class JikkyoPlugin: NSObject, BonboriPlugin {
     private var opacityPercent: Int {
         get { host.defaults.object(forKey: "opacity") == nil ? 100 : host.defaults.integer(forKey: "opacity") }
         set { host.defaults.set(newValue, forKey: "opacity") }
+    }
+
+    @objc private func setSource(_ sender: NSMenuItem) {
+        let new = CommentSource.allCases[sender.tag]
+        guard new != source else { return }
+        source = new
+        guard isActive else { return }
+        // The other server has not refused us.
+        failures = 0
+        retryAfter = .distantPast
+        closeClient()
+        overlay.clear()
+        if host.service != nil, let text = unavailableText { host.showMessage(text, detail: nil) }
+        update(settle: 0)
     }
 
     @objc private func setLineCount(_ sender: NSMenuItem) {
