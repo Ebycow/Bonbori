@@ -10,6 +10,15 @@ final class ChannelListPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegat
     private enum Row {
         case header(String)
         case channel(Channel)
+        /// A data, temporary or engineering service (not for zapping).
+        case other(Channel)
+
+        var channel: Channel? {
+            switch self {
+            case .header: return nil
+            case .channel(let c), .other(let c): return c
+            }
+        }
     }
 
     init(controller: MainController) {
@@ -55,10 +64,15 @@ final class ChannelListPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegat
             if list.isEmpty { continue }
             rows.append(.header(kind.title))
             rows.append(contentsOf: list.map { .channel($0) })
+            let others = ChannelStore.shared.otherServices(of: kind)
+            if !others.isEmpty {
+                rows.append(.header("\(kind.title)  その他のサービス"))
+                rows.append(contentsOf: others.map { .other($0) })
+            }
         }
         table.reloadData()
         if let cur = controller?.currentChannel,
-           let idx = rows.firstIndex(where: { if case .channel(let c) = $0 { return c.id == cur.id }; return false }) {
+           let idx = rows.firstIndex(where: { $0.channel?.id == cur.id }) {
             table.selectRowIndexes([idx], byExtendingSelection: false)
             table.scrollRowToVisible(idx)
         }
@@ -85,16 +99,24 @@ final class ChannelListPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegat
             tf.font = .boldSystemFont(ofSize: 12)
         case .channel(let c):
             let key = c.remoteKey > 0 ? String(format: "%2d", c.remoteKey) : "  "
-            tf.stringValue = "\(key)  \(c.name)"
+            tf.stringValue = "\(key)  \(c.displayName)"
             tf.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
             tf.toolTip = "\(c.spaceName) \(c.channelName)  SID \(c.sid)  \(c.tsName)"
+        case .other(let c):
+            let s = NSMutableAttributedString(string: c.displayName, attributes: [.font: NSFont.systemFont(ofSize: 13)])
+            s.append(NSAttributedString(string: "  \(c.serviceTypeName)", attributes: [
+                .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor,
+            ]))
+            tf.attributedStringValue = s
+            tf.toolTip = String(format: "%@ %@  SID %d  service_type 0x%02X  %@", c.spaceName, c.channelName, c.sid,
+                                c.serviceType, c.tsName)
         }
         return tf
     }
 
     @objc private func activate(_ sender: Any?) {
         let r = table.clickedRow >= 0 ? table.clickedRow : table.selectedRow
-        guard r >= 0, case .channel(let c) = rows[r] else { return }
+        guard r >= 0, let c = rows[r].channel else { return }
         controller?.tune(c)
     }
 

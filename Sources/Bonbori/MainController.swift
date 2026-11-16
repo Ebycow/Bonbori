@@ -135,7 +135,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         stream = nil
         scrambleWarned = false
         lastTuneAt = Date()
-        if remember {
+        // Data and engineering services are visited, not returned to on launch or with T / B / C.
+        if remember && ChannelStore.isTV(ch) && !ch.isPlaceholder {
             lastByKind[ch.kind] = ch.id
             Settings.shared.lastChannelID = ch.id
         }
@@ -280,16 +281,16 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             sub = "\(timeRange(p))  \(p.title)"
             if let n = program?.following { sub! += "\n次: \(timeRange(n))  \(n.title)" }
         }
-        videoView.showHUD("\(key)\(ch.name)", sub)
+        videoView.showHUD("\(key)\(ch.displayName)", sub)
     }
 
     private func updateTitle() {
         guard let ch = current else { window.title = appName; return }
         let rec = player.isRecording ? "● " : ""
         if let t = program?.present?.title, !t.isEmpty {
-            window.title = "\(rec)\(ch.name) — \(t)"
+            window.title = "\(rec)\(ch.displayName) — \(t)"
         } else {
-            window.title = rec + ch.name
+            window.title = rec + ch.displayName
         }
     }
 
@@ -695,6 +696,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         b25.state = s.serverB25 ? .on : .off
         let subch = NSButton(checkboxWithTitle: "サブチャンネル（NHK総合2 等）も選局対象にする", target: nil, action: nil)
         subch.state = s.showSubChannels ? .on : .off
+        let others = NSButton(checkboxWithTitle: "データ放送・臨時・エンジニアリングのサービスも一覧に出す", target: nil, action: nil)
+        others.state = s.showOtherServices ? .on : .off
         for f in [host, port, groups, latency] { f.widthAnchor.constraint(equalToConstant: 260).isActive = true }
         grid.addRow(with: [NSTextField(labelWithString: "サーバー"), host])
         grid.addRow(with: [NSTextField(labelWithString: "ポート"), port])
@@ -702,7 +705,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         grid.addRow(with: [NSTextField(labelWithString: "遅延 (秒)"), latency])
         grid.addRow(with: [NSView(), b25])
         grid.addRow(with: [NSView(), subch])
-        grid.frame = NSRect(x: 0, y: 0, width: 420, height: 175)
+        grid.addRow(with: [NSView(), others])
+        grid.frame = NSRect(x: 0, y: 0, width: 420, height: 200)
         a.accessoryView = grid
         guard a.runModal() == .alertFirstButtonReturn else { return }
         s.host = host.stringValue.trimmingCharacters(in: .whitespaces)
@@ -711,6 +715,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         s.latency = max(0.05, min(3.0, Double(latency.stringValue) ?? 0.3))
         s.serverB25 = b25.state == .on
         s.showSubChannels = subch.state == .on
+        s.showOtherServices = others.state == .on
         buildMenus()
         touchBar.refresh()
         listPanel.reload()
@@ -898,8 +903,21 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             mi.target = self
             mi.representedObject = ch.id
         }
+        let others = store.otherServices(of: kind)
+        if !others.isEmpty {
+            sub.addItem(.separator())
+            let oi = sub.addItem(withTitle: "その他のサービス", action: nil, keyEquivalent: "")
+            let om = NSMenu()
+            for ch in others {
+                let mi = om.addItem(withTitle: "\(ch.displayName)  (\(ch.serviceTypeName))", action: #selector(menuTune(_:)), keyEquivalent: "")
+                mi.target = self
+                mi.representedObject = ch.id
+                mi.toolTip = String(format: "%@  SID %d  service_type 0x%02X", ch.tsName, ch.sid, ch.serviceType)
+            }
+            oi.submenu = om
+        }
         item.submenu = sub
-        item.isEnabled = !list.isEmpty
+        item.isEnabled = !list.isEmpty || !others.isEmpty
         return item
     }
 
