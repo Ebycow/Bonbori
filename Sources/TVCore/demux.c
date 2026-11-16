@@ -382,6 +382,10 @@ static void choose_program(tv_demux *d)
         for (int i = 0; i < d->nprog; i++)
             if (d->prog[i].number == d->target_sid)
                 sid = d->target_sid;
+        // A requested service that is not in the PAT is off the air (a temporary or promotional
+        // service): wait for it to start rather than show another service of the TS.
+        if (sid < 0)
+            return;
     }
     if (sid < 0 && d->nservices > 0) {
         // first TV service in SDT order that is in the PAT
